@@ -1,0 +1,45 @@
+[package]
+name = "truegather-backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Framework HTTP principal.
+axum = { version = "0.8", features = ["macros", "json"] }
+
+# Runtime asynchrone.
+tokio = { version = "1", features = ["full"] }
+
+# Middlewares HTTP utiles.
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# Sérialisation / désérialisation.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Chargement de configuration.
+config = "0.15"
+dotenvy = "0.15"
+
+# Client HTTP pour parler plus tard à Keycloak.
+reqwest = { version = "0.13", features = ["json"] }
+
+# Validation des payloads.
+validator = { version = "0.20", features = ["derive"] }
+
+# Gestion d'erreurs ergonomique.
+thiserror = "2"
+
+# Logs structurés.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Préparation de l'intégration OIDC.
+openidconnect = { version = "4.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+
+# Identifiants et dates.
+uuid = { version = "1", features = ["serde", "v4"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
+
+# Types HTTP.
+http = "1"
