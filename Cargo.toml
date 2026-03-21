@@ -36,6 +36,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Préparation de l'intégration OIDC.
 openidconnect = { version = "4.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+urlencoding = "2"
+serde_urlencoded = "0.7"
 
 # Identifiants et dates.
 uuid = { version = "1", features = ["serde", "v4"] }
@@ -43,3 +45,7 @@ chrono = { version = "0.4", features = ["serde", "clock"] }
 
 # Types HTTP.
 http = "1"
+
+# Algorithmes cryptographiques
+sha2 = "0.10"
+base64 = "0.22"
