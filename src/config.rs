@@ -84,7 +84,7 @@ impl AppConfig {
 
     // Retourne l'URL frontend après login réussi.
     pub fn frontend_post_login_url(&self) -> String {
-        format!("{}/meetings/create", self.frontend.base_url)
+        self.frontend.base_url.clone()
     }
 
     // Retourne l'URL frontend après logout.
