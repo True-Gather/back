@@ -14,6 +14,8 @@ use uuid::Uuid;
 
 // Import de la configuration.
 use crate::config::AppConfig;
+use crate::models::User;
+use chrono::{DateTime, Utc};
 
 // Représente une demande d'authentification en attente.
 //
@@ -29,6 +31,7 @@ pub struct PendingAuthRequest {
 
     // Indique si le flow avait été lancé pour une inscription.
     pub is_registration: bool,
+    pub created_at: DateTime<Utc>,
 }
 
 // Représente une session applicative locale.
@@ -74,6 +77,18 @@ pub struct AppState {
     //
     // Clé : session_id.
     pub sessions: Arc<RwLock<HashMap<String, AppSession>>>,
+
+    // Store mémoire des utilisateurs applicatifs locaux.
+    //
+    // Clé : user_id.
+    pub users: Arc<RwLock<HashMap<Uuid, User>>>,
+
+    // Index mémoire pour retrouver rapidement un utilisateur
+    // applicatif local depuis le sub Keycloak.
+    //
+    // Clé : keycloak_sub
+    // Valeur : user_id
+    pub users_by_keycloak_sub: Arc<RwLock<HashMap<String, Uuid>>>,
 }
 
 // Implémentation du state.
@@ -95,6 +110,8 @@ impl AppState {
             http_client,
             pending_auth: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            users: Arc::new(RwLock::new(HashMap::new())),
+            users_by_keycloak_sub: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 }

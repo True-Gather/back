@@ -14,6 +14,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+use chrono::Utc;
 
 use crate::{
     error::{AppError, AppResult},
@@ -141,6 +142,7 @@ pub async fn prepare_authorization_redirect(
         nonce: nonce.clone(),
         pkce_verifier,
         is_registration,
+        created_at: Utc::now(),
     };
 
     // Stockage temporaire dans le state partagé.
@@ -215,7 +217,7 @@ pub async fn exchange_code_for_tokens(
 
     // Log utile de debug.
     tracing::info!(
-        "OIDC token exchange | client_id={} | redirect_uri={} | code_verifier_length={}",
+        "OIDC start | client_id={} | state={} | is_registration={}",
         state.config.keycloak.client_id,
         state.config.auth_callback_url(),
         pkce_verifier.len(),
