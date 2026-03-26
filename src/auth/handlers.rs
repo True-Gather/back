@@ -31,6 +31,7 @@ use crate::{
     state::AppState,
 };
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct IdTokenClaims {
     sub: String,
