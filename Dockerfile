@@ -1,5 +1,5 @@
 # Étape 1 : Construction (Builder)
-FROM rust:1.85-bullseye AS builder
+FROM rust:bookworm AS builder
 
 WORKDIR /usr/src/app
 # On copie les manifestes et on crée un dummy pour mettre en cache les dépendances
@@ -16,7 +16,7 @@ COPY keycloak ./keycloak
 RUN touch src/main.rs && cargo build --release
 
 # Étape 2 : Runtime léger
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 # Installation des certificats racine SSL pour Keycloak et reqwest
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
