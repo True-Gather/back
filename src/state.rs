@@ -3,11 +3,7 @@
 // Cet état est clonable et injecté dans les handlers Axum.
 // Il contient tout ce qui doit être mutualisé entre les requêtes.
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::sync::RwLock;
 use uuid::Uuid;

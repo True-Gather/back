@@ -59,7 +59,10 @@ impl AppConfig {
             // Default frontend local Nuxt.
             .set_default("frontend.base_url", "http://localhost:3000")?
             // Defaults Keycloak.
-            .set_default("keycloak.issuer_url", "http://localhost:8081/realms/truegather")?
+            .set_default(
+                "keycloak.issuer_url",
+                "http://localhost:8081/realms/truegather",
+            )?
             .set_default("keycloak.client_id", "truegather-backend")?
             // Defaults auth applicative.
             .set_default("auth.cookie_name", "tg_session")?

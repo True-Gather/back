@@ -3,11 +3,7 @@
 use std::error::Error;
 
 // Import des fonctions et types exposés par la librairie du projet.
-use truegather_backend::{
-    build_app,
-    config::AppConfig,
-    state::AppState,
-};
+use truegather_backend::{build_app, config::AppConfig, state::AppState};
 
 // Macro principale Tokio pour exécuter l'application en asynchrone.
 #[tokio::main]
@@ -28,7 +24,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 // Initialise le système de logs.
 fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt};
 
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,truegather_backend=debug,tower_http=info"));

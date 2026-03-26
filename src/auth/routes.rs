@@ -1,8 +1,8 @@
 // Déclaration des routes auth.
 
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 
 use crate::auth::handlers;

@@ -13,8 +13,8 @@ pub mod ws;
 
 // Imports nécessaires pour construire le router global.
 use axum::{
-    http::{header, HeaderValue, Method},
     Router,
+    http::{HeaderValue, Method, header},
 };
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -54,11 +54,7 @@ fn build_cors_layer(frontend_origin: &str) -> CorsLayer {
             CorsLayer::new()
                 .allow_origin(origin)
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers([
-                    header::CONTENT_TYPE,
-                    header::ACCEPT,
-                    header::AUTHORIZATION,
-                ])
+                .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
                 .allow_credentials(true)
         }
         Err(_) => {
@@ -69,11 +65,7 @@ fn build_cors_layer(frontend_origin: &str) -> CorsLayer {
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers([
-                    header::CONTENT_TYPE,
-                    header::ACCEPT,
-                    header::AUTHORIZATION,
-                ])
+                .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
         }
     }
 }

@@ -22,9 +22,7 @@ fn build_display_name(userinfo: &UserInfoClaims) -> String {
         .clone()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| match (&userinfo.given_name, &userinfo.family_name) {
-            (Some(first_name), Some(last_name)) => {
-                Some(format!("{} {}", first_name, last_name))
-            }
+            (Some(first_name), Some(last_name)) => Some(format!("{} {}", first_name, last_name)),
             (Some(first_name), None) => Some(first_name.clone()),
             (None, Some(last_name)) => Some(last_name.clone()),
             (None, None) => None,

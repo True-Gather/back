@@ -6,7 +6,7 @@
 // - lecture du cookie depuis les headers,
 // - invalidation du cookie.
 
-use axum::http::{header, HeaderMap};
+use axum::http::{HeaderMap, header};
 use uuid::Uuid;
 
 use crate::{
@@ -19,10 +19,7 @@ use crate::{
 //
 // Pour le moment, cette session est stockée en mémoire.
 // Plus tard, elle pourra être stockée dans Redis ou une base.
-pub async fn create_session(
-    state: &AppState,
-    user: &User,
-) -> AppResult<String> {
+pub async fn create_session(state: &AppState, user: &User) -> AppResult<String> {
     // Génération d'un identifiant de session opaque.
     let session_id = Uuid::new_v4().to_string();
 
@@ -57,11 +54,7 @@ pub async fn create_session(
 // - HttpOnly pour empêcher l'accès JavaScript,
 // - SameSite=Lax pour une base saine,
 // - Secure si configuré.
-pub fn build_session_cookie(
-    cookie_name: &str,
-    session_id: &str,
-    secure: bool,
-) -> String {
+pub fn build_session_cookie(cookie_name: &str, session_id: &str, secure: bool) -> String {
     // Base du cookie.
     let mut cookie = format!(
         "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800",
@@ -77,10 +70,7 @@ pub fn build_session_cookie(
 }
 
 // Construit un cookie d'invalidation de session.
-pub fn build_cleared_session_cookie(
-    cookie_name: &str,
-    secure: bool,
-) -> String {
+pub fn build_cleared_session_cookie(cookie_name: &str, secure: bool) -> String {
     // Base du cookie de suppression.
     let mut cookie = format!(
         "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
@@ -99,10 +89,7 @@ pub fn build_cleared_session_cookie(
 //
 // Cette fonction lit le header HTTP Cookie et retrouve
 // la valeur du cookie attendu.
-pub fn extract_session_id_from_headers(
-    headers: &HeaderMap,
-    cookie_name: &str,
-) -> Option<String> {
+pub fn extract_session_id_from_headers(headers: &HeaderMap, cookie_name: &str) -> Option<String> {
     // Lecture du header Cookie brut.
     let raw_cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
 
