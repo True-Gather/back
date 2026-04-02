@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use tokio::sync::RwLock;
 
@@ -29,6 +30,9 @@ pub struct PendingAuthRequest {
 
     // Indique si le flow avait été lancé pour une inscription.
     pub is_registration: bool,
+
+    // Date de création de la demande pour limiter sa durée de vie.
+    pub created_at: DateTime<Utc>,
 }
 
 // Représente une session applicative locale.

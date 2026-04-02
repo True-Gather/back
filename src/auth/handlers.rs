@@ -15,7 +15,11 @@ use axum::{
     Json,
 };
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use serde::Deserialize;
+
 use validator::Validate;
+use chrono::{Utc, Duration};
 
 use crate::{
     auth::dto::{
@@ -29,6 +33,12 @@ use crate::{
     models::UserProfileView,
     state::AppState,
 };
+
+#[derive(Debug, Deserialize)]
+struct IdTokenClaims {
+    exp: u64,
+    nonce: Option<String>,
+}
 
 // Démarre le flow de login.
 //
@@ -73,7 +83,7 @@ pub async fn auth_callback(
     State(state): State<AppState>,
     Query(query): Query<AuthCallbackQuery>,
 ) -> AppResult<Response> {
-    // Si Keycloak renvoie une erreur explicite, on la remonte.
+    // Gestion des erreurs Keycloak
     if let Some(error) = query.error {
         let description = query
             .error_description
@@ -85,7 +95,7 @@ pub async fn auth_callback(
         )));
     }
 
-    // Validation minimale des paramètres attendus.
+    // Validation paramètres
     let code = query
         .code
         .ok_or_else(|| AppError::BadRequest("Missing authorization code".to_string()))?;
@@ -94,22 +104,23 @@ pub async fn auth_callback(
         .state
         .ok_or_else(|| AppError::BadRequest("Missing state parameter".to_string()))?;
 
-    // On récupère puis on retire immédiatement la demande OIDC stockée.
-    //
-    // Cela évite le rejeu du state.
+    // Récupération + suppression du state
     let pending_request = {
         let mut pending_auth = state.pending_auth.write().await;
         pending_auth.remove(&oauth_state)
     }
     .ok_or_else(|| AppError::BadRequest("Unknown or expired state parameter".to_string()))?;
 
-    // On garde le nonce de côté.
-    //
-    // Dans cette étape, on ne valide pas encore cryptographiquement l'ID token.
-    // Ce sera ajouté dans l'étape de hardening suivante.
-    let _expected_nonce = pending_request.nonce.clone();
+    // Vérification expiration du state
+    let max_age = Duration::minutes(5);
 
-    // Échange du code contre des tokens.
+    if Utc::now() - pending_request.created_at > max_age {
+        return Err(AppError::BadRequest(
+            "Expired authentication request".to_string(),
+        ));
+    }
+
+    // Exchange code → tokens
     let token_response = crate::auth::oidc::exchange_code_for_tokens(
         &state,
         &code,
@@ -117,7 +128,40 @@ pub async fn auth_callback(
     )
     .await?;
 
-    // Récupération du profil utilisateur via userinfo.
+    // Récupération id_token (OBLIGATOIRE)
+    let id_token = token_response
+        .id_token
+        .ok_or_else(|| AppError::Internal("Missing id_token".to_string()))?;
+
+    // Décodage JWT (MVP, sans signature)
+    let parts: Vec<&str> = id_token.split('.').collect();
+
+    if parts.len() != 3 {
+        return Err(AppError::Internal("Invalid id_token format".to_string()));
+    }
+
+    let payload = parts[1];
+
+    let decoded = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| AppError::Internal("Failed to decode id_token".to_string()))?;
+
+    let claims: IdTokenClaims = serde_json::from_slice(&decoded)
+        .map_err(|_| AppError::Internal("Invalid id_token payload".to_string()))?;
+
+    // Vérification nonce
+    if claims.nonce.as_deref() != Some(&pending_request.nonce) {
+        return Err(AppError::BadRequest("Invalid nonce".to_string()));
+    }
+
+    // Vérification expiration token
+    let now = Utc::now().timestamp() as u64;
+
+    if claims.exp < now {
+        return Err(AppError::BadRequest("Expired id_token".to_string()));
+    }
+
+    // Récupération userinfo
     let userinfo = crate::auth::oidc::fetch_userinfo(
         &state,
         &token_response.access_token,
@@ -130,21 +174,23 @@ pub async fn auth_callback(
     // Création de la session applicative locale.
     let session_id = crate::auth::session::create_session(&state, &synced_user).await?;
 
-    // Construction du cookie de session.
+    // Cookie
     let cookie_value = crate::auth::session::build_session_cookie(
         &state.config.auth.cookie_name,
         &session_id,
         state.config.auth.cookie_secure,
     );
 
-    // Construction de la redirection frontend après login réussi.
-    let mut response = Redirect::to(&state.config.frontend_post_login_url()).into_response();
+    // Redirection frontend
+    let mut response =
+        Redirect::to(&state.config.frontend_post_login_url()).into_response();
 
-    // Injection du cookie HTTP-only dans la réponse.
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie_value)
-            .map_err(|error| AppError::Internal(format!("Invalid Set-Cookie header: {}", error)))?,
+            .map_err(|error| {
+                AppError::Internal(format!("Invalid Set-Cookie header: {}", error))
+            })?,
     );
 
     Ok(response)

@@ -113,4 +113,4 @@ pub fn extract_session_id_from_headers(
     }
 
     None
-}
+}   
