@@ -65,6 +65,7 @@ pub async fn start_register(
 // - vérifie la présence du state stocké,
 // - échange le code contre des tokens,
 // - récupère le userinfo,
+// - synchronise l'utilisateur en base,
 // - crée une session applicative,
 // - pose un cookie HTTP-only,
 // - redirige vers le frontend.
@@ -123,8 +124,11 @@ pub async fn auth_callback(
     )
     .await?;
 
+    // Synchronisation JIT de l'utilisateur dans PostgreSQL.
+    let synced_user = crate::auth::sync::sync_user_from_oidc(&state, &userinfo).await?;
+
     // Création de la session applicative locale.
-    let session_id = crate::auth::session::create_session(&state, &userinfo).await?;
+    let session_id = crate::auth::session::create_session(&state, &synced_user).await?;
 
     // Construction du cookie de session.
     let cookie_value = crate::auth::session::build_session_cookie(
@@ -184,7 +188,7 @@ pub async fn me(
 
     // Construction de la vue user pour le frontend.
     let user = UserProfileView {
-        id: session.user_id,
+        id: session.keycloak_id,
         email: session.email,
         display_name: session.display_name,
         first_name: session.first_name,

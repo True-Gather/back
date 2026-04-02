@@ -9,8 +9,8 @@ use std::{
     time::Duration,
 };
 
+use sqlx::PgPool;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 // Import de la configuration.
 use crate::config::AppConfig;
@@ -37,11 +37,8 @@ pub struct PendingAuthRequest {
 // Plus tard, elle pourra être migrée vers Redis ou une base.
 #[derive(Debug, Clone)]
 pub struct AppSession {
-    // Identifiant interne local de l'utilisateur.
-    pub user_id: Uuid,
-
     // Identifiant stable renvoyé par Keycloak.
-    pub keycloak_sub: String,
+    pub keycloak_id: String,
 
     // Email utilisateur.
     pub email: String,
@@ -65,6 +62,9 @@ pub struct AppState {
     // Client HTTP partagé pour les appels externes.
     pub http_client: reqwest::Client,
 
+    // Pool de connexions PostgreSQL.
+    pub db: PgPool,
+
     // Store mémoire temporaire des flows OIDC en attente.
     //
     // Clé : state OAuth/OIDC.
@@ -79,7 +79,7 @@ pub struct AppState {
 // Implémentation du state.
 impl AppState {
     // Construit un nouvel état partagé.
-    pub fn new(config: AppConfig) -> Result<Self, reqwest::Error> {
+    pub async fn new(config: AppConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Construction du client HTTP.
         let http_client = reqwest::Client::builder()
             // User-Agent explicite pour identifier l'application.
@@ -89,10 +89,17 @@ impl AppState {
             // Construction du client final.
             .build()?;
 
+        // Construction du pool PostgreSQL.
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(10)
+            .connect(&config.database.url)
+            .await?;
+
         // Retour de l'état prêt à être injecté.
         Ok(Self {
             config,
             http_client,
+            db,
             pending_auth: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
         })

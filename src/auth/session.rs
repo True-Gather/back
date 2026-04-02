@@ -10,54 +10,29 @@ use axum::http::{header, HeaderMap};
 use uuid::Uuid;
 
 use crate::{
-    auth::oidc::UserInfoClaims,
     error::AppResult,
+    models::User,
     state::{AppSession, AppState},
 };
 
-// Crée une session applicative locale à partir du profil OIDC.
+// Crée une session applicative locale à partir de l'utilisateur applicatif.
 //
 // Pour le moment, cette session est stockée en mémoire.
 // Plus tard, elle pourra être stockée dans Redis ou une base.
 pub async fn create_session(
     state: &AppState,
-    userinfo: &UserInfoClaims,
+    user: &User,
 ) -> AppResult<String> {
-    // Génération d'un identifiant local d'utilisateur.
-    //
-    // Plus tard, ce champ sera remplacé par un vrai utilisateur persistant.
-    let user_id = Uuid::new_v4();
-
     // Génération d'un identifiant de session opaque.
     let session_id = Uuid::new_v4().to_string();
 
-    // Construction d'un display name cohérent.
-    let display_name = userinfo
-        .name
-        .clone()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            match (&userinfo.given_name, &userinfo.family_name) {
-                (Some(first_name), Some(last_name)) => {
-                    Some(format!("{} {}", first_name, last_name))
-                }
-                (Some(first_name), None) => Some(first_name.clone()),
-                (None, Some(last_name)) => Some(last_name.clone()),
-                (None, None) => None,
-            }
-        })
-        .or_else(|| userinfo.preferred_username.clone())
-        .or_else(|| userinfo.email.clone())
-        .unwrap_or_else(|| "TrueGather User".to_string());
-
     // Construction de la session applicative.
     let session = AppSession {
-        user_id,
-        keycloak_sub: userinfo.sub.clone(),
-        email: userinfo.email.clone().unwrap_or_default(),
-        display_name,
-        first_name: userinfo.given_name.clone(),
-        last_name: userinfo.family_name.clone(),
+        keycloak_id: user.keycloak_id.clone(),
+        email: user.email.clone(),
+        display_name: user.display_name.clone(),
+        first_name: user.first_name.clone(),
+        last_name: user.last_name.clone(),
     };
 
     // Stockage mémoire de la session.
