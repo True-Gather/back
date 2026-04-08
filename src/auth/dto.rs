@@ -45,7 +45,10 @@ pub struct ResetPasswordRequest {
     #[validate(length(min = 8, message = "Password must contain at least 8 characters"))]
     pub new_password: String,
 
-    #[validate(length(min = 8, message = "Password confirmation must contain at least 8 characters"))]
+    #[validate(length(
+        min = 8,
+        message = "Password confirmation must contain at least 8 characters"
+    ))]
     pub confirm_password: String,
 }
 

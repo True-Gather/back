@@ -10,11 +10,11 @@
 // - récupération du profil utilisateur via l'endpoint userinfo.
 
 use axum::http::header;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::Utc;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
-use chrono::Utc;
 
 use crate::{
     error::{AppError, AppResult},
@@ -85,11 +85,7 @@ pub struct UserInfoClaims {
 // Le résultat final fait 64 caractères, ce qui respecte bien
 // la contrainte PKCE de longueur comprise entre 43 et 128.
 fn generate_pkce_verifier() -> String {
-    format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 // Calcule le code challenge PKCE en S256.
@@ -154,7 +150,7 @@ pub async fn prepare_authorization_redirect(
     // Construction de l'endpoint d'autorisation Keycloak.
     let authorization_endpoint = format!(
         "{}/protocol/openid-connect/auth",
-        state.config.keycloak.issuer_url_public
+        state.config.keycloak.issuer_url
     );
 
     // Scopes standard OIDC utiles au projet.
@@ -199,7 +195,7 @@ pub async fn exchange_code_for_tokens(
     // Construction de l'endpoint token.
     let token_endpoint = format!(
         "{}/protocol/openid-connect/token",
-        state.config.keycloak.issuer_url_internal
+        state.config.keycloak.issuer_url
     );
 
     // Construction du formulaire standard OIDC.
@@ -256,14 +252,11 @@ pub async fn exchange_code_for_tokens(
 // Récupère le profil utilisateur via l'endpoint userinfo.
 //
 // Cette fonction utilise l'access token obtenu après l'échange du code.
-pub async fn fetch_userinfo(
-    state: &AppState,
-    access_token: &str,
-) -> AppResult<UserInfoClaims> {
+pub async fn fetch_userinfo(state: &AppState, access_token: &str) -> AppResult<UserInfoClaims> {
     // Construction de l'endpoint userinfo.
     let userinfo_endpoint = format!(
         "{}/protocol/openid-connect/userinfo",
-        state.config.keycloak.issuer_url_internal
+        state.config.keycloak.issuer_url
     );
 
     // Appel HTTP authentifié avec l'access token.

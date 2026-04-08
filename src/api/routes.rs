@@ -1,8 +1,8 @@
 // Déclaration des routes génériques de l'API.
 
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 
 // Import des handlers.
