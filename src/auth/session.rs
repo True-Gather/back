@@ -10,12 +10,12 @@ use axum::http::{header, HeaderMap};
 use uuid::Uuid;
 
 use crate::{
-    error::{AppError, AppResult},
+    error::AppResult,
     models::User,
     state::{AppSession, AppState},
 };
 
-// Crée une session applicative locale à partir d'un utilisateur local.
+// Crée une session applicative locale à partir de l'utilisateur applicatif.
 //
 // Pour le moment, cette session est stockée en mémoire.
 // Plus tard, elle pourra être stockée dans Redis ou une base.
@@ -26,15 +26,9 @@ pub async fn create_session(
     // Génération d'un identifiant de session opaque.
     let session_id = Uuid::new_v4().to_string();
 
-    let keycloak_sub = user
-        .keycloak_sub
-        .clone()
-        .ok_or_else(|| AppError::Internal("Local user is missing keycloak_sub".to_string()))?;
-
     // Construction de la session applicative.
     let session = AppSession {
-        user_id: user.id,
-        keycloak_sub,
+        keycloak_id: user.keycloak_id.clone(),
         email: user.email.clone(),
         display_name: user.display_name.clone(),
         first_name: user.first_name.clone(),
@@ -119,4 +113,4 @@ pub fn extract_session_id_from_headers(
     }
 
     None
-}
+}   

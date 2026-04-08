@@ -49,3 +49,6 @@ http = "1"
 # Algorithmes cryptographiques
 sha2 = "0.10"
 base64 = "0.22"
+
+# PostgreSQL + migrations
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate"] }

@@ -36,11 +36,7 @@ use crate::{
 
 #[derive(Debug, Deserialize)]
 struct IdTokenClaims {
-    sub: String,
     exp: u64,
-    iat: u64,
-    iss: String,
-    aud: String,
     nonce: Option<String>,
 }
 
@@ -79,6 +75,7 @@ pub async fn start_register(
 // - vérifie la présence du state stocké,
 // - échange le code contre des tokens,
 // - récupère le userinfo,
+// - synchronise l'utilisateur en base,
 // - crée une session applicative,
 // - pose un cookie HTTP-only,
 // - redirige vers le frontend.
@@ -171,13 +168,11 @@ pub async fn auth_callback(
     )
     .await?;
 
-    // Sync user local
-    let local_user =
-        crate::auth::sync::sync_user_from_keycloak(&state, &userinfo).await?;
+    // Synchronisation JIT de l'utilisateur dans PostgreSQL.
+    let synced_user = crate::auth::sync::sync_user_from_oidc(&state, &userinfo).await?;
 
-    // Création session
-    let session_id =
-        crate::auth::session::create_session(&state, &local_user).await?;
+    // Création de la session applicative locale.
+    let session_id = crate::auth::session::create_session(&state, &synced_user).await?;
 
     // Cookie
     let cookie_value = crate::auth::session::build_session_cookie(
@@ -239,7 +234,7 @@ pub async fn me(
 
     // Construction de la vue user pour le frontend.
     let user = UserProfileView {
-        id: session.user_id,
+        id: session.keycloak_id,
         email: session.email,
         display_name: session.display_name,
         first_name: session.first_name,

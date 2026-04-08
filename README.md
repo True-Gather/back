@@ -31,44 +31,14 @@ back/
 
 - Rust installé
 - Docker installé
-- Node (pour le frontend si besoin)
-
+- Node 
 ---
 
-## 🔐 Lancer Keycloak
+## Lancement du projet :
 
-Depuis le dossier racine du projet :
+## Enlever le fichier compose.yaml du dossier back et le mettre a la racine du projet
 
-```bash
-docker run --name keycloak \
-  -p 127.0.0.1:8081:8080 \
-  -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
-  -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
-  -e KC_HOSTNAME=http://localhost:8081 \
-  -v $(pwd)/../keycloak-data:/opt/keycloak/data \
-  -v $(pwd)/keycloak/import:/opt/keycloak/data/import \
-  -v $(pwd)/keycloak/themes:/opt/keycloak/themes \
-  quay.io/keycloak/keycloak:26.5.5 \
-  start-dev --import-realm
-
-```
-
-  ## Accès admin
-  http://localhost:8081/admin
-
-  ## Identifiants : 
-  admin / admin
-
-  ## ⚙️ Configuration backend
-  ```bash
-    cp .env.example .env
-
-  ```
-  ## ▶️ Lancer le backend
-    ```bash
-      cargo run
-    
-    ```
+  docker compose up --build
 
   ## 🔑 Authentification
   ## Flow utilisé :
@@ -96,3 +66,5 @@ docker run --name keycloak \
 
   ## Le thème custom est dans :
     keycloak/themes/truegather
+
+  

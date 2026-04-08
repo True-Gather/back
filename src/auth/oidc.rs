@@ -154,7 +154,7 @@ pub async fn prepare_authorization_redirect(
     // Construction de l'endpoint d'autorisation Keycloak.
     let authorization_endpoint = format!(
         "{}/protocol/openid-connect/auth",
-        state.config.keycloak.issuer_url
+        state.config.keycloak.issuer_url_public
     );
 
     // Scopes standard OIDC utiles au projet.
@@ -199,7 +199,7 @@ pub async fn exchange_code_for_tokens(
     // Construction de l'endpoint token.
     let token_endpoint = format!(
         "{}/protocol/openid-connect/token",
-        state.config.keycloak.issuer_url
+        state.config.keycloak.issuer_url_internal
     );
 
     // Construction du formulaire standard OIDC.
@@ -263,7 +263,7 @@ pub async fn fetch_userinfo(
     // Construction de l'endpoint userinfo.
     let userinfo_endpoint = format!(
         "{}/protocol/openid-connect/userinfo",
-        state.config.keycloak.issuer_url
+        state.config.keycloak.issuer_url_internal
     );
 
     // Appel HTTP authentifié avec l'access token.
