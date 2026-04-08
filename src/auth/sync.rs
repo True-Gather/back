@@ -1,15 +1,12 @@
-// Synchronisation utilisateur.
+// Synchronisation utilisateur locale depuis les claims Keycloak.
 //
-// Ce fichier contient la logique de synchronisation JIT (Just-In-Time)
-// d'un utilisateur Keycloak vers la table `users` PostgreSQL.
-//
-// Objectif :
-// - créer l'utilisateur local s'il n'existe pas encore,
-// - mettre à jour ses informations s'il existe déjà,
-// - retourner une représentation applicative cohérente.
+// Ce fichier gère :
+// - la création JIT d'un user local,
+// - la mise à jour du profil depuis les claims Keycloak,
+// - le mapping entre sub Keycloak et user applicatif.
 
 use chrono::Utc;
-use sqlx::query_as;
+use uuid::Uuid;
 
 use crate::{
     auth::oidc::UserInfoClaims,
@@ -18,100 +15,87 @@ use crate::{
     state::AppState,
 };
 
-// Synchronise un utilisateur Keycloak dans la base PostgreSQL.
-//
-// Cette fonction :
-// - utilise `sub` comme identifiant stable,
-// - récupère les infos disponibles depuis userinfo,
-// - fait un UPSERT sur la table `users`,
-// - retourne l'utilisateur applicatif final.
-pub async fn sync_user_from_oidc(
+// Construit un nom d'affichage cohérent à partir des claims Keycloak.
+fn build_display_name(userinfo: &UserInfoClaims) -> String {
+    userinfo
+        .name
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| match (&userinfo.given_name, &userinfo.family_name) {
+            (Some(first_name), Some(last_name)) => Some(format!("{} {}", first_name, last_name)),
+            (Some(first_name), None) => Some(first_name.clone()),
+            (None, Some(last_name)) => Some(last_name.clone()),
+            (None, None) => None,
+        })
+        .or_else(|| userinfo.preferred_username.clone())
+        .or_else(|| userinfo.email.clone())
+        .unwrap_or_else(|| "TrueGather User".to_string())
+}
+
+// Crée ou met à jour un utilisateur local à partir du profil Keycloak.
+pub async fn sync_user_from_keycloak(
     state: &AppState,
     userinfo: &UserInfoClaims,
 ) -> AppResult<User> {
-    // Identifiant stable Keycloak.
-    let keycloak_id = userinfo.sub.clone();
+    let keycloak_sub = userinfo.sub.trim().to_string();
 
-    // Email récupéré depuis userinfo.
-    let email = userinfo
-        .email
-        .clone()
-        .ok_or_else(|| AppError::BadRequest("Missing email in OIDC userinfo".to_string()))?;
+    if keycloak_sub.is_empty() {
+        return Err(AppError::Internal(
+            "Keycloak userinfo returned an empty sub".to_string(),
+        ));
+    }
 
-    // Prénom éventuel.
+    let display_name = build_display_name(userinfo);
+    let email = userinfo.email.clone().unwrap_or_default();
     let first_name = userinfo.given_name.clone();
-
-    // Nom éventuel.
     let last_name = userinfo.family_name.clone();
-
-    // Nom affiché.
-    //
-    // Ordre de préférence :
-    // 1. name
-    // 2. preferred_username
-    // 3. email
-    let display_name = userinfo
-        .name
-        .clone()
-        .or_else(|| userinfo.preferred_username.clone())
-        .unwrap_or_else(|| email.clone());
-
-    // Date de connexion actuelle.
     let now = Utc::now();
 
-    // UPSERT PostgreSQL.
-    //
-    // Si l'utilisateur existe déjà :
-    // - on met à jour email / nom / prénom / display_name
-    // - on met à jour last_login_at
-    //
-    // Sinon :
-    // - on crée la ligne
-    let user = query_as::<_, User>(
-        r#"
-        INSERT INTO users (
-            keycloak_id,
-            first_name,
-            last_name,
-            display_name,
-            email,
-            profile_photo_url,
-            created_at,
-            updated_at,
-            last_login_at,
-            is_active
-        )
-        VALUES ($1, $2, $3, $4, $5, NULL, $6, $6, $6, TRUE)
-        ON CONFLICT (keycloak_id)
-        DO UPDATE SET
-            first_name = EXCLUDED.first_name,
-            last_name = EXCLUDED.last_name,
-            display_name = EXCLUDED.display_name,
-            email = EXCLUDED.email,
-            updated_at = EXCLUDED.updated_at,
-            last_login_at = EXCLUDED.last_login_at
-        RETURNING
-            keycloak_id,
-            first_name,
-            last_name,
-            display_name,
-            email,
-            profile_photo_url,
-            created_at,
-            updated_at,
-            last_login_at,
-            is_active
-        "#
-    )
-    .bind(keycloak_id)
-    .bind(first_name)
-    .bind(last_name)
-    .bind(display_name)
-    .bind(email)
-    .bind(now)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|error| AppError::Internal(format!("Failed to sync user in database: {}", error)))?;
+    // Étape 1 : retrouver un user existant via le mapping sub -> user_id.
+    let maybe_user_id = {
+        let users_by_keycloak_sub = state.users_by_keycloak_sub.read().await;
+        users_by_keycloak_sub.get(&keycloak_sub).copied()
+    };
 
-    Ok(user)
+    // Étape 2 : si trouvé, mise à jour du user existant.
+    if let Some(user_id) = maybe_user_id {
+        let mut users = state.users.write().await;
+
+        if let Some(existing_user) = users.get_mut(&user_id) {
+            existing_user.keycloak_sub = Some(keycloak_sub.clone());
+            existing_user.email = email;
+            existing_user.display_name = display_name;
+            existing_user.first_name = first_name;
+            existing_user.last_name = last_name;
+            existing_user.updated_at = now;
+            existing_user.last_login_at = Some(now);
+
+            return Ok(existing_user.clone());
+        }
+    }
+
+    // Étape 3 : sinon création JIT d'un nouvel utilisateur local.
+    let new_user = User {
+        id: Uuid::new_v4(),
+        keycloak_sub: Some(keycloak_sub.clone()),
+        email,
+        display_name,
+        first_name,
+        last_name,
+        created_at: now,
+        updated_at: now,
+        last_login_at: Some(now),
+    };
+
+    {
+        let mut users = state.users.write().await;
+        users.insert(new_user.id, new_user.clone());
+    }
+
+    {
+        let mut users_by_keycloak_sub = state.users_by_keycloak_sub.write().await;
+        users_by_keycloak_sub.insert(keycloak_sub, new_user.id);
+    }
+
+    Ok(new_user)
 }

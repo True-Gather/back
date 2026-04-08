@@ -9,24 +9,21 @@
 // - les placeholders forgot/reset password.
 
 use axum::{
-    extract::{Query, State},
-    http::{header, HeaderMap, HeaderValue},
-    response::{IntoResponse, Redirect, Response},
     Json,
+    extract::{Query, State},
+    http::{HeaderMap, HeaderValue, header},
+    response::{IntoResponse, Redirect, Response},
 };
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
 
+use chrono::{Duration, Utc};
 use validator::Validate;
-use chrono::{Utc, Duration};
 
 use crate::{
     auth::dto::{
-        AuthCallbackQuery,
-        ForgotPasswordRequest,
-        MessageResponse,
-        ResetPasswordRequest,
+        AuthCallbackQuery, ForgotPasswordRequest, MessageResponse, ResetPasswordRequest,
         SessionSnapshotResponse,
     },
     error::{AppError, AppResult},
@@ -34,9 +31,14 @@ use crate::{
     state::AppState,
 };
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct IdTokenClaims {
+    sub: String,
     exp: u64,
+    iat: u64,
+    iss: String,
+    aud: String,
     nonce: Option<String>,
 }
 
@@ -44,9 +46,7 @@ struct IdTokenClaims {
 //
 // Ce handler prépare une demande OIDC puis redirige le navigateur
 // vers Keycloak.
-pub async fn start_login(
-    State(state): State<AppState>,
-) -> AppResult<Redirect> {
+pub async fn start_login(State(state): State<AppState>) -> AppResult<Redirect> {
     // Préparation du flow OIDC en mode login.
     let auth_request = crate::auth::oidc::prepare_authorization_redirect(&state, false).await;
 
@@ -58,9 +58,7 @@ pub async fn start_login(
 //
 // Ce handler prépare une demande OIDC puis redirige le navigateur
 // vers Keycloak en orientant le flow vers le parcours d'inscription.
-pub async fn start_register(
-    State(state): State<AppState>,
-) -> AppResult<Redirect> {
+pub async fn start_register(State(state): State<AppState>) -> AppResult<Redirect> {
     // Préparation du flow OIDC en mode inscription.
     let auth_request = crate::auth::oidc::prepare_authorization_redirect(&state, true).await;
 
@@ -75,7 +73,6 @@ pub async fn start_register(
 // - vérifie la présence du state stocké,
 // - échange le code contre des tokens,
 // - récupère le userinfo,
-// - synchronise l'utilisateur en base,
 // - crée une session applicative,
 // - pose un cookie HTTP-only,
 // - redirige vers le frontend.
@@ -121,12 +118,9 @@ pub async fn auth_callback(
     }
 
     // Exchange code → tokens
-    let token_response = crate::auth::oidc::exchange_code_for_tokens(
-        &state,
-        &code,
-        &pending_request.pkce_verifier,
-    )
-    .await?;
+    let token_response =
+        crate::auth::oidc::exchange_code_for_tokens(&state, &code, &pending_request.pkce_verifier)
+            .await?;
 
     // Récupération id_token (OBLIGATOIRE)
     let id_token = token_response
@@ -162,17 +156,13 @@ pub async fn auth_callback(
     }
 
     // Récupération userinfo
-    let userinfo = crate::auth::oidc::fetch_userinfo(
-        &state,
-        &token_response.access_token,
-    )
-    .await?;
+    let userinfo = crate::auth::oidc::fetch_userinfo(&state, &token_response.access_token).await?;
 
-    // Synchronisation JIT de l'utilisateur dans PostgreSQL.
-    let synced_user = crate::auth::sync::sync_user_from_oidc(&state, &userinfo).await?;
+    // Sync user local
+    let local_user = crate::auth::sync::sync_user_from_keycloak(&state, &userinfo).await?;
 
-    // Création de la session applicative locale.
-    let session_id = crate::auth::session::create_session(&state, &synced_user).await?;
+    // Création session
+    let session_id = crate::auth::session::create_session(&state, &local_user).await?;
 
     // Cookie
     let cookie_value = crate::auth::session::build_session_cookie(
@@ -182,15 +172,12 @@ pub async fn auth_callback(
     );
 
     // Redirection frontend
-    let mut response =
-        Redirect::to(&state.config.frontend_post_login_url()).into_response();
+    let mut response = Redirect::to(&state.config.frontend_post_login_url()).into_response();
 
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie_value)
-            .map_err(|error| {
-                AppError::Internal(format!("Invalid Set-Cookie header: {}", error))
-            })?,
+            .map_err(|error| AppError::Internal(format!("Invalid Set-Cookie header: {}", error)))?,
     );
 
     Ok(response)
@@ -234,7 +221,7 @@ pub async fn me(
 
     // Construction de la vue user pour le frontend.
     let user = UserProfileView {
-        id: session.keycloak_id,
+        id: session.user_id,
         email: session.email,
         display_name: session.display_name,
         first_name: session.first_name,
@@ -251,10 +238,7 @@ pub async fn me(
 //
 // Ce handler supprime la session mémoire si elle existe
 // et renvoie un cookie expiré.
-pub async fn logout(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> AppResult<Response> {
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     // Extraction éventuelle de l'identifiant de session.
     let maybe_session_id = crate::auth::session::extract_session_id_from_headers(
         &headers,
