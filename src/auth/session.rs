@@ -19,7 +19,7 @@ use crate::{
 //
 // Pour le moment, cette session est stockée en mémoire.
 // Plus tard, elle pourra être stockée dans Redis ou une base.
-pub async fn create_session(state: &AppState, user: &User) -> AppResult<String> {
+pub async fn create_session(state: &AppState, user: &User, id_token: Option<String>) -> AppResult<String> {
     // Génération d'un identifiant de session opaque.
     let session_id = Uuid::new_v4().to_string();
 
@@ -36,6 +36,7 @@ pub async fn create_session(state: &AppState, user: &User) -> AppResult<String> 
         display_name: user.display_name.clone(),
         first_name: user.first_name.clone(),
         last_name: user.last_name.clone(),
+        id_token,
     };
 
     // Stockage mémoire de la session.
@@ -44,7 +45,6 @@ pub async fn create_session(state: &AppState, user: &User) -> AppResult<String> 
         sessions.insert(session_id.clone(), session);
     }
 
-    // Retourne l'identifiant de session.
     Ok(session_id)
 }
 
@@ -61,7 +61,6 @@ pub fn build_session_cookie(cookie_name: &str, session_id: &str, secure: bool) -
         cookie_name, session_id
     );
 
-    // Ajout du flag Secure si demandé.
     if secure {
         cookie.push_str("; Secure");
     }
@@ -77,7 +76,6 @@ pub fn build_cleared_session_cookie(cookie_name: &str, secure: bool) -> String {
         cookie_name
     );
 
-    // Ajout du flag Secure si demandé.
     if secure {
         cookie.push_str("; Secure");
     }
@@ -93,7 +91,6 @@ pub fn extract_session_id_from_headers(headers: &HeaderMap, cookie_name: &str) -
     // Lecture du header Cookie brut.
     let raw_cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
 
-    // Parcours des cookies séparés par ';'.
     for cookie_part in raw_cookie_header.split(';') {
         let trimmed = cookie_part.trim();
 
