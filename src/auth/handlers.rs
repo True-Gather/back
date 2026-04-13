@@ -181,30 +181,28 @@ pub async fn me(
         }));
     };
 
-    let maybe_session = {
+    let maybe_response = {
         let sessions = state.sessions.read().await;
-        sessions.get(&session_id).cloned()
+        sessions.get(&session_id).map(|session| SessionSnapshotResponse {
+            authenticated: true,
+            user: Some(UserProfileView {
+                id: session.keycloak_id.clone(),
+                email: session.email.clone(),
+                display_name: session.display_name.clone(),
+                first_name: session.first_name.clone(),
+                last_name: session.last_name.clone(),
+            }),
+        })
     };
 
-    let Some(session) = maybe_session else {
+    let Some(response) = maybe_response else {
         return Ok(Json(SessionSnapshotResponse {
             authenticated: false,
             user: None,
         }));
     };
 
-    let user = UserProfileView {
-        id: session.keycloak_id,
-        email: session.email,
-        display_name: session.display_name,
-        first_name: session.first_name,
-        last_name: session.last_name,
-    };
-
-    Ok(Json(SessionSnapshotResponse {
-        authenticated: true,
-        user: Some(user),
-    }))
+    Ok(Json(response))
 }
 
 // Déconnexion applicative + logout OIDC.
