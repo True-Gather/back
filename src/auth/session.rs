@@ -22,6 +22,7 @@ use crate::{
 pub async fn create_session(
     state: &AppState,
     user: &User,
+    id_token: Option<String>,
 ) -> AppResult<String> {
     // Génération d'un identifiant de session opaque.
     let session_id = Uuid::new_v4().to_string();
@@ -33,6 +34,7 @@ pub async fn create_session(
         display_name: user.display_name.clone(),
         first_name: user.first_name.clone(),
         last_name: user.last_name.clone(),
+        id_token,
     };
 
     // Stockage mémoire de la session.
@@ -41,7 +43,6 @@ pub async fn create_session(
         sessions.insert(session_id.clone(), session);
     }
 
-    // Retourne l'identifiant de session.
     Ok(session_id)
 }
 
@@ -56,13 +57,11 @@ pub fn build_session_cookie(
     session_id: &str,
     secure: bool,
 ) -> String {
-    // Base du cookie.
     let mut cookie = format!(
         "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age=28800",
         cookie_name, session_id
     );
 
-    // Ajout du flag Secure si demandé.
     if secure {
         cookie.push_str("; Secure");
     }
@@ -75,13 +74,11 @@ pub fn build_cleared_session_cookie(
     cookie_name: &str,
     secure: bool,
 ) -> String {
-    // Base du cookie de suppression.
     let mut cookie = format!(
         "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0",
         cookie_name
     );
 
-    // Ajout du flag Secure si demandé.
     if secure {
         cookie.push_str("; Secure");
     }
@@ -97,14 +94,11 @@ pub fn extract_session_id_from_headers(
     headers: &HeaderMap,
     cookie_name: &str,
 ) -> Option<String> {
-    // Lecture du header Cookie brut.
     let raw_cookie_header = headers.get(header::COOKIE)?.to_str().ok()?;
 
-    // Parcours des cookies séparés par ';'.
     for cookie_part in raw_cookie_header.split(';') {
         let trimmed = cookie_part.trim();
 
-        // Découpage nom=valeur.
         if let Some((name, value)) = trimmed.split_once('=') {
             if name == cookie_name {
                 return Some(value.to_string());
@@ -113,4 +107,4 @@ pub fn extract_session_id_from_headers(
     }
 
     None
-}   
+}

@@ -76,10 +76,12 @@ impl AppConfig {
     }
 
     pub fn frontend_post_login_url(&self) -> String {
-        self.frontend.base_url.clone()
+        format!("{}/dashboard", self.frontend.base_url.trim_end_matches('/'))
     }
 
     pub fn frontend_post_logout_url(&self) -> String {
-        format!("{}/", self.frontend.base_url.trim_end_matches('/'))
+        format!(
+            "{}/", self.frontend.base_url.trim_end_matches('/')
+        )
     }
 }

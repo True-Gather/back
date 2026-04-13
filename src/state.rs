@@ -55,6 +55,9 @@ pub struct AppSession {
 
     // Nom éventuel.
     pub last_name: Option<String>,
+
+    // ID token conservé pour pouvoir faire un logout OIDC propre côté Keycloak.
+    pub id_token: Option<String>,
 }
 
 // État partagé principal.
@@ -86,11 +89,8 @@ impl AppState {
     pub async fn new(config: AppConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         // Construction du client HTTP.
         let http_client = reqwest::Client::builder()
-            // User-Agent explicite pour identifier l'application.
             .user_agent("truegather-backend/0.1.0")
-            // Timeout global raisonnable.
             .timeout(Duration::from_secs(15))
-            // Construction du client final.
             .build()?;
 
         // Construction du pool PostgreSQL.
@@ -99,7 +99,6 @@ impl AppState {
             .connect(&config.database.url)
             .await?;
 
-        // Retour de l'état prêt à être injecté.
         Ok(Self {
             config,
             http_client,
