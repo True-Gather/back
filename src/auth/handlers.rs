@@ -246,7 +246,10 @@ pub async fn logout(
         state.config.frontend_post_logout_url()
     };
 
-    tracing::info!("LOGOUT redirect_target = {}", redirect_target);
+    tracing::info!(
+        "LOGOUT redirect prepared (oidc_logout={})",
+        maybe_id_token.is_some()
+    );
     let mut response = Redirect::to(&redirect_target).into_response();
 
     response.headers_mut().insert(
