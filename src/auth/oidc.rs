@@ -11,7 +11,7 @@
 // - construction de l'URL de logout OIDC.
 
 use axum::http::header;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::Utc;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -54,11 +54,7 @@ pub struct UserInfoClaims {
 
 // Génère un code verifier PKCE conforme.
 fn generate_pkce_verifier() -> String {
-    format!(
-        "{}{}",
-        Uuid::new_v4().simple(),
-        Uuid::new_v4().simple()
-    )
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
 // Calcule le code challenge PKCE en S256.
@@ -99,7 +95,7 @@ pub async fn prepare_authorization_redirect(
 
     let authorization_endpoint = format!(
         "{}/protocol/openid-connect/auth",
-        state.config.keycloak.issuer_url_public
+        state.config.keycloak.issuer_url
     );
 
     let scope = "openid profile email";
@@ -136,7 +132,7 @@ pub fn build_logout_redirect_url(
 ) -> String {
     let logout_endpoint = format!(
         "{}/protocol/openid-connect/logout",
-        state.config.keycloak.issuer_url_public
+        state.config.keycloak.issuer_url
     );
 
     let post_logout_redirect_uri = state.config.frontend_post_logout_url();
@@ -167,7 +163,7 @@ pub async fn exchange_code_for_tokens(
 ) -> AppResult<TokenResponse> {
     let token_endpoint = format!(
         "{}/protocol/openid-connect/token",
-        state.config.keycloak.issuer_url_internal
+        state.config.keycloak.issuer_url
     );
 
     let form_fields = vec![
@@ -215,13 +211,13 @@ pub async fn exchange_code_for_tokens(
 }
 
 // Récupère le profil utilisateur via l'endpoint userinfo.
-pub async fn fetch_userinfo(
-    state: &AppState,
-    access_token: &str,
-) -> AppResult<UserInfoClaims> {
+//
+// Cette fonction utilise l'access token obtenu après l'échange du code.
+pub async fn fetch_userinfo(state: &AppState, access_token: &str) -> AppResult<UserInfoClaims> {
+    // Construction de l'endpoint userinfo.
     let userinfo_endpoint = format!(
         "{}/protocol/openid-connect/userinfo",
-        state.config.keycloak.issuer_url_internal
+        state.config.keycloak.issuer_url
     );
 
     let response = state

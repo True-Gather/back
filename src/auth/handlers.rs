@@ -9,23 +9,21 @@
 // - les placeholders forgot/reset password.
 
 use axum::{
-    extract::{Query, State},
-    http::{header, HeaderMap, HeaderValue},
-    response::{IntoResponse, Redirect, Response},
     Json,
+    extract::{Query, State},
+    http::{HeaderMap, HeaderValue, header},
+    response::{IntoResponse, Redirect, Response},
 };
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{Duration, Utc};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::Deserialize;
+
+use chrono::{Duration, Utc};
 use validator::Validate;
 
 use crate::{
     auth::dto::{
-        AuthCallbackQuery,
-        ForgotPasswordRequest,
-        MessageResponse,
-        ResetPasswordRequest,
+        AuthCallbackQuery, ForgotPasswordRequest, MessageResponse, ResetPasswordRequest,
         SessionSnapshotResponse,
     },
     error::{AppError, AppResult},
@@ -33,29 +31,47 @@ use crate::{
     state::AppState,
 };
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct IdTokenClaims {
+    sub: String,
     exp: u64,
+    iat: u64,
+    iss: String,
+    aud: String,
     nonce: Option<String>,
 }
 
 // Démarre le flow de login.
-pub async fn start_login(
-    State(state): State<AppState>,
-) -> AppResult<Redirect> {
+//
+// Ce handler prépare une demande OIDC puis redirige le navigateur
+// vers Keycloak.
+pub async fn start_login(State(state): State<AppState>) -> AppResult<Redirect> {
+    // Préparation du flow OIDC en mode login.
     let auth_request = crate::auth::oidc::prepare_authorization_redirect(&state, false).await;
     Ok(Redirect::to(&auth_request.authorization_url))
 }
 
 // Démarre le flow d'inscription.
-pub async fn start_register(
-    State(state): State<AppState>,
-) -> AppResult<Redirect> {
+//
+// Ce handler prépare une demande OIDC puis redirige le navigateur
+// vers Keycloak en orientant le flow vers le parcours d'inscription.
+pub async fn start_register(State(state): State<AppState>) -> AppResult<Redirect> {
+    // Préparation du flow OIDC en mode inscription.
     let auth_request = crate::auth::oidc::prepare_authorization_redirect(&state, true).await;
     Ok(Redirect::to(&auth_request.authorization_url))
 }
 
 // Callback OIDC réel.
+//
+// Ce handler :
+// - lit code et state,
+// - vérifie la présence du state stocké,
+// - échange le code contre des tokens,
+// - récupère le userinfo,
+// - crée une session applicative,
+// - pose un cookie HTTP-only,
+// - redirige vers le frontend.
 pub async fn auth_callback(
     State(state): State<AppState>,
     Query(query): Query<AuthCallbackQuery>,
@@ -93,12 +109,10 @@ pub async fn auth_callback(
         ));
     }
 
-    let token_response = crate::auth::oidc::exchange_code_for_tokens(
-        &state,
-        &code,
-        &pending_request.pkce_verifier,
-    )
-    .await?;
+    // Exchange code → tokens
+    let token_response =
+        crate::auth::oidc::exchange_code_for_tokens(&state, &code, &pending_request.pkce_verifier)
+            .await?;
 
     let id_token = token_response
         .id_token
@@ -129,20 +143,14 @@ pub async fn auth_callback(
         return Err(AppError::BadRequest("Expired id_token".to_string()));
     }
 
-    let userinfo = crate::auth::oidc::fetch_userinfo(
-        &state,
-        &token_response.access_token,
-    )
-    .await?;
+    // Récupération userinfo
+    let userinfo = crate::auth::oidc::fetch_userinfo(&state, &token_response.access_token).await?;
 
-    let synced_user = crate::auth::sync::sync_user_from_oidc(&state, &userinfo).await?;
+    // Sync user local
+    let local_user = crate::auth::sync::sync_user_from_keycloak(&state, &userinfo).await?;
 
-    let session_id = crate::auth::session::create_session(
-        &state,
-        &synced_user,
-        Some(id_token.clone()),
-    )
-    .await?;
+    // Création session
+    let session_id = crate::auth::session::create_session(&state, &local_user, Some(id_token.clone())).await?;
 
     let cookie_value = crate::auth::session::build_session_cookie(
         &state.config.auth.cookie_name,
@@ -150,15 +158,13 @@ pub async fn auth_callback(
         state.config.auth.cookie_secure,
     );
 
-    let mut response =
-        Redirect::to(&state.config.frontend_post_login_url()).into_response();
+    // Redirection frontend
+    let mut response = Redirect::to(&state.config.frontend_post_login_url()).into_response();
 
     response.headers_mut().insert(
         header::SET_COOKIE,
         HeaderValue::from_str(&cookie_value)
-            .map_err(|error| {
-                AppError::Internal(format!("Invalid Set-Cookie header: {}", error))
-            })?,
+            .map_err(|error| AppError::Internal(format!("Invalid Set-Cookie header: {}", error)))?,
     );
 
     Ok(response)
@@ -181,28 +187,30 @@ pub async fn me(
         }));
     };
 
-    let maybe_response = {
+    let maybe_session = {
         let sessions = state.sessions.read().await;
-        sessions.get(&session_id).map(|session| SessionSnapshotResponse {
-            authenticated: true,
-            user: Some(UserProfileView {
-                id: session.keycloak_id.clone(),
-                email: session.email.clone(),
-                display_name: session.display_name.clone(),
-                first_name: session.first_name.clone(),
-                last_name: session.last_name.clone(),
-            }),
-        })
+        sessions.get(&session_id).cloned()
     };
 
-    let Some(response) = maybe_response else {
+    let Some(session) = maybe_session else {
         return Ok(Json(SessionSnapshotResponse {
             authenticated: false,
             user: None,
         }));
     };
 
-    Ok(Json(response))
+    let user = UserProfileView {
+        id: session.user_id,
+        email: session.email,
+        display_name: session.display_name,
+        first_name: session.first_name,
+        last_name: session.last_name,
+    };
+
+    Ok(Json(SessionSnapshotResponse {
+        authenticated: true,
+        user: Some(user),
+    }))
 }
 
 // Déconnexion applicative + logout OIDC.

@@ -1,9 +1,6 @@
 // Handlers API génériques.
 
-use axum::{
-    extract::State,
-    Json,
-};
+use axum::{Json, extract::State};
 
 // Imports internes.
 use crate::{
