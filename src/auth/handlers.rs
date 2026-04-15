@@ -16,7 +16,7 @@ use axum::{
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use chrono::{Duration, Utc};
 use validator::Validate;
@@ -187,28 +187,32 @@ pub async fn me(
         }));
     };
 
-    let maybe_response = {
+    let session = {
         let sessions = state.sessions.read().await;
-        sessions.get(&session_id).map(|session| SessionSnapshotResponse {
-            authenticated: true,
-            user: Some(UserProfileView {
-                id: session.user_id,
-                email: session.email.clone(),
-                display_name: session.display_name.clone(),
-                first_name: session.first_name.clone(),
-                last_name: session.last_name.clone(),
-            }),
-        })
+        sessions.get(&session_id).cloned()
     };
 
-    let Some(response) = maybe_response else {
+    let Some(session) = session else {
         return Ok(Json(SessionSnapshotResponse {
             authenticated: false,
             user: None,
         }));
     };
 
-    Ok(Json(response))
+    // Construction de la vue user pour le frontend.
+    let user = UserProfileView {
+        id: session.user_id,
+        email: session.email,
+        display_name: session.display_name,
+        first_name: session.first_name,
+        last_name: session.last_name,
+        profile_photo_url: session.profile_photo_url,
+    };
+
+    Ok(Json(SessionSnapshotResponse {
+        authenticated: true,
+        user: Some(user),
+    }))
 }
 
 // Déconnexion applicative + logout OIDC.
@@ -292,5 +296,220 @@ pub async fn reset_password(
 
     Ok(Json(MessageResponse {
         message: "Password reset payload accepted by backend skeleton".to_string(),
+    }))
+}
+
+// Payload pour la mise à jour de l'avatar.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UpdateAvatarRequest {
+    // Base64 data URL (ex. "data:image/png;base64,...") ou null pour supprimer.
+    pub avatar_url: Option<String>,
+}
+
+// Met à jour la photo de profil de l'utilisateur connecté.
+//
+// Persiste la valeur en base PostgreSQL et met à jour la session mémoire.
+pub async fn update_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateAvatarRequest>,
+) -> AppResult<Json<MessageResponse>> {
+    // Extraction de la session.
+    let session_id = crate::auth::session::extract_session_id_from_headers(
+        &headers,
+        &state.config.auth.cookie_name,
+    )
+    .ok_or_else(|| AppError::Unauthorized)?;
+
+    let session = {
+        let sessions = state.sessions.read().await;
+        sessions.get(&session_id).cloned()
+    }
+    .ok_or_else(|| AppError::Unauthorized)?;
+
+    // Mise à jour en base.
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET profile_photo_url = $1, updated_at = NOW()
+        WHERE keycloak_id = $2
+        "#,
+    )
+    .bind(&payload.avatar_url)
+    .bind(&session.keycloak_sub)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("DB avatar update error: {}", e)))?;
+
+    // Mise à jour de la session mémoire.
+    {
+        let mut sessions = state.sessions.write().await;
+        if let Some(s) = sessions.get_mut(&session_id) {
+            s.profile_photo_url = payload.avatar_url;
+        }
+    }
+
+    Ok(Json(MessageResponse {
+        message: "Avatar updated".to_string(),
+    }))
+}
+
+// Payload pour le changement de mot de passe.
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+    pub confirm_password: String,
+}
+
+// Change le mot de passe de l'utilisateur connecté via l'API Keycloak.
+//
+// Flow :
+// 1. Extraction de la session courante.
+// 2. Validation du payload (correspondance, longueur minimale).
+// 3. Vérification du mot de passe actuel via ROPC (Resource Owner Password Credentials).
+// 4. Obtention d'un token admin via client_credentials.
+// 5. Mise à jour du mot de passe via l'API admin Keycloak.
+pub async fn change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> AppResult<Json<MessageResponse>> {
+    // 1. Extraction de la session.
+    let session_id = crate::auth::session::extract_session_id_from_headers(
+        &headers,
+        &state.config.auth.cookie_name,
+    )
+    .ok_or_else(|| AppError::Unauthorized)?;
+
+    let session = {
+        let sessions = state.sessions.read().await;
+        sessions.get(&session_id).cloned()
+    }
+    .ok_or_else(|| AppError::Unauthorized)?;
+
+    // 2. Validation basique du payload.
+    if payload.new_password != payload.confirm_password {
+        return Err(AppError::Validation(
+            "Les mots de passe ne correspondent pas".to_string(),
+        ));
+    }
+    if payload.new_password.len() < 14 {
+        return Err(AppError::Validation(
+            "Le nouveau mot de passe doit contenir au moins 14 caractères".to_string(),
+        ));
+    }
+
+    // 3. Construction des URLs Keycloak à partir de l'issuer_url interne.
+    //    Format attendu : http(s)://host:port/realms/{realm}
+    let kc_internal = state
+        .config
+        .keycloak
+        .issuer_url_internal
+        .as_deref()
+        .unwrap_or(&state.config.keycloak.issuer_url);
+
+    let (kc_host, realm) = kc_internal
+        .split_once("/realms/")
+        .map(|(h, r)| (h.to_string(), r.to_string()))
+        .ok_or_else(|| {
+            AppError::Internal("Format d'issuer_url Keycloak invalide".to_string())
+        })?;
+
+    let token_url = format!(
+        "{}/realms/{}/protocol/openid-connect/token",
+        kc_host, realm
+    );
+    let reset_url = format!(
+        "{}/admin/realms/{}/users/{}/reset-password",
+        kc_host, realm, session.keycloak_sub
+    );
+
+    let client_id = &state.config.keycloak.client_id;
+    let client_secret = state
+        .config
+        .keycloak
+        .client_secret
+        .as_deref()
+        .unwrap_or("");
+
+    // 4. Vérification du mot de passe actuel via ROPC.
+    //    Si le grant échoue (401), le mot de passe fourni est incorrect.
+    let ropc_params: &[(&str, &str)] = &[
+        ("grant_type", "password"),
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret),
+        ("username", session.email.as_str()),
+        ("password", payload.current_password.as_str()),
+    ];
+    let ropc_resp = state
+        .http_client
+        .post(&token_url)
+        .form(ropc_params)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Keycloak ROPC error: {}", e)))?;
+
+    if !ropc_resp.status().is_success() {
+        return Err(AppError::Validation(
+            "Mot de passe actuel incorrect".to_string(),
+        ));
+    }
+
+    // 5. Obtention d'un token admin via client_credentials.
+    let admin_params: &[(&str, &str)] = &[
+        ("grant_type", "client_credentials"),
+        ("client_id", client_id.as_str()),
+        ("client_secret", client_secret),
+    ];
+    let admin_token_resp = state
+        .http_client
+        .post(&token_url)
+        .form(admin_params)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Keycloak admin token error: {}", e)))?;
+
+    if !admin_token_resp.status().is_success() {
+        return Err(AppError::Internal(
+            "Impossible d'obtenir le token admin Keycloak — vérifier les rôles du service account"
+                .to_string(),
+        ));
+    }
+
+    let admin_json = admin_token_resp
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| AppError::Internal(format!("Admin token parse error: {}", e)))?;
+
+    let admin_token = admin_json["access_token"]
+        .as_str()
+        .ok_or_else(|| AppError::Internal("access_token manquant dans la réponse admin".to_string()))?;
+
+    // 6. Mise à jour du mot de passe via l'API admin Keycloak.
+    let reset_resp = state
+        .http_client
+        .put(&reset_url)
+        .bearer_auth(admin_token)
+        .json(&serde_json::json!({
+            "type": "password",
+            "value": payload.new_password,
+            "temporary": false
+        }))
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Keycloak reset-password error: {}", e)))?;
+
+    if !reset_resp.status().is_success() {
+        let status = reset_resp.status();
+        let body = reset_resp.text().await.unwrap_or_default();
+        return Err(AppError::Internal(format!(
+            "Keycloak reset-password failed ({}): {}",
+            status, body
+        )));
+    }
+
+    Ok(Json(MessageResponse {
+        message: "Mot de passe modifié avec succès".to_string(),
     }))
 }

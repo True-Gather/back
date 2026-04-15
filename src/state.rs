@@ -6,6 +6,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use deadpool_redis::Pool as RedisPool;
+use sqlx::PgPool;
 use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 
@@ -57,6 +58,9 @@ pub struct AppSession {
 
     // ID token conservé pour pouvoir faire un logout OIDC propre côté Keycloak.
     pub id_token: Option<String>,
+
+    // URL de la photo de profil (base64 data URL ou chemin).
+    pub profile_photo_url: Option<String>,
 }
 
 // État partagé principal.
@@ -93,6 +97,9 @@ pub struct AppState {
     // Pool de connexions Redis.
     pub redis: RedisPool,
 
+    // Pool de connexions PostgreSQL.
+    pub db: PgPool,
+
     // Rooms de signalisation WebRTC actives.
     //
     // Clé externe : room_id
@@ -104,7 +111,7 @@ pub struct AppState {
 // Implémentation du state.
 impl AppState {
     // Construit un nouvel état partagé.
-    pub fn new(config: AppConfig, redis: RedisPool) -> Result<Self, reqwest::Error> {
+    pub fn new(config: AppConfig, redis: RedisPool, db: PgPool) -> Result<Self, reqwest::Error> {
         // Construction du client HTTP.
         let http_client = reqwest::Client::builder()
             .user_agent("truegather-backend/0.1.0")
@@ -120,6 +127,7 @@ impl AppState {
             users: Arc::new(RwLock::new(HashMap::new())),
             users_by_keycloak_sub: Arc::new(RwLock::new(HashMap::new())),
             redis,
+            db,
             signaling_rooms: Arc::new(RwLock::new(HashMap::new())),
         })
     }

@@ -11,6 +11,7 @@ pub struct AppConfig {
     pub auth: AuthConfig,
     pub redis: RedisConfig,
     pub turn: TurnConfig,
+    pub database: DatabaseConfig,
 }
 
 // Configuration du serveur HTTP.
@@ -35,7 +36,11 @@ pub struct FrontendConfig {
 // Configuration liée à Keycloak.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KeycloakConfig {
+    // URL publique (navigateur → Keycloak) : ex. http://localhost:8081/realms/truegather
     pub issuer_url: String,
+    // URL interne (backend → Keycloak) : ex. http://host.docker.internal:8081/realms/truegather
+    // Si absent, on retombe sur issuer_url.
+    pub issuer_url_internal: Option<String>,
     pub client_id: String,
     pub client_secret: Option<String>,
 }
@@ -50,6 +55,12 @@ pub struct AuthConfig {
 // Configuration Redis.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RedisConfig {
+    pub url: String,
+}
+
+// Configuration PostgreSQL.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseConfig {
     pub url: String,
 }
 
@@ -86,11 +97,14 @@ impl AppConfig {
                 "http://localhost:8081/realms/truegather",
             )?
             .set_default("keycloak.client_id", "truegather-backend")?
+            .set_default::<_, Option<String>>("keycloak.issuer_url_internal", None)?
             // Defaults auth applicative.
             .set_default("auth.cookie_name", "tg_session")?
             .set_default("auth.cookie_secure", false)?
             // Default Redis local.
             .set_default("redis.url", "redis://127.0.0.1:6379")?
+            // Default PostgreSQL local.
+            .set_default("database.url", "postgres://tg_user:tg_password@localhost:5434/truegather")?
             // Defaults TURN / ICE.
             // Les URLs STUN sont configurées via APP_TURN__STUN_URLS (liste JSON).
             // En l'absence de variable d'env, on utilise les serveurs STUN Google.

@@ -163,7 +163,8 @@ pub async fn exchange_code_for_tokens(
 ) -> AppResult<TokenResponse> {
     let token_endpoint = format!(
         "{}/protocol/openid-connect/token",
-        state.config.keycloak.issuer_url
+        state.config.keycloak.issuer_url_internal.as_deref()
+            .unwrap_or(&state.config.keycloak.issuer_url)
     );
 
     let form_fields = vec![
@@ -217,7 +218,8 @@ pub async fn fetch_userinfo(state: &AppState, access_token: &str) -> AppResult<U
     // Construction de l'endpoint userinfo.
     let userinfo_endpoint = format!(
         "{}/protocol/openid-connect/userinfo",
-        state.config.keycloak.issuer_url
+        state.config.keycloak.issuer_url_internal.as_deref()
+            .unwrap_or(&state.config.keycloak.issuer_url)
     );
 
     let response = state
