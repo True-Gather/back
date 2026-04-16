@@ -98,7 +98,9 @@ pub fn extract_session_id_from_headers(headers: &HeaderMap, cookie_name: &str) -
         let trimmed = cookie_part.trim();
 
         // Découpage nom=valeur.
-        if let Some((name, value)) = trimmed.split_once('=') && name == cookie_name {
+        if let Some((name, value)) = trimmed.split_once('=')
+            && name == cookie_name
+        {
             return Some(value.to_string());
         }
     }
