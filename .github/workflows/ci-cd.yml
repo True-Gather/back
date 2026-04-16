@@ -71,8 +71,8 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Installation de sqlx-cli (driver PostgreSQL uniquement)
-        run: cargo install sqlx-cli --no-default-features --features postgres
+      - name: Installation de sqlx-cli (PostgreSQL + TLS natif pour Neon)
+        run: cargo install sqlx-cli --no-default-features --features postgres,native-tls
 
       - name: Application des migrations sur la base Neon
         env:
