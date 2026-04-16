@@ -106,7 +106,7 @@ pub async fn prepare_authorization_redirect(
     let redirect_uri = state.config.auth_callback_url();
 
     let registration_part = if is_registration {
-        "&kc_action=register"
+        "&prompt=create"
     } else {
         ""
     };

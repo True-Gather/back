@@ -5,13 +5,13 @@ edition = "2024"
 
 [dependencies]
 # Framework HTTP principal.
-axum = { version = "0.8", features = ["macros", "json"] }
+axum = { version = "0.8", features = ["macros", "json", "multipart"] }
 
 # Runtime asynchrone.
 tokio = { version = "1", features = ["full"] }
 
 # Middlewares HTTP utiles.
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 
 # Sérialisation / désérialisation.
 serde = { version = "1", features = ["derive"] }
