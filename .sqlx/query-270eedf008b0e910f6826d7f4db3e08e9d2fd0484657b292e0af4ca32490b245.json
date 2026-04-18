@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT DISTINCT\n            m.meeting_id,\n            m.title,\n            m.description,\n            m.host_keycloak_id,\n            m.scheduled_start_at,\n            m.scheduled_end_at,\n            m.ai_enabled,\n            m.status\n        FROM meetings m\n        LEFT JOIN meeting_participants mp ON mp.meeting_id = m.meeting_id\n        WHERE m.status != 'cancelled'\n          AND (\n              m.host_keycloak_id = $1\n              OR (mp.user_keycloak_id = $1 AND mp.status != 'declined')\n          )\n        ORDER BY m.scheduled_start_at ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "meeting_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "host_keycloak_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "scheduled_start_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "scheduled_end_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "ai_enabled",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "status",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "270eedf008b0e910f6826d7f4db3e08e9d2fd0484657b292e0af4ca32490b245"
+}

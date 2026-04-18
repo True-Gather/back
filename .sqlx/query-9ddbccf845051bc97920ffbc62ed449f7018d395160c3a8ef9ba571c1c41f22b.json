@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT m.title,\n                   m.scheduled_start_at,\n                   m.scheduled_end_at\n            FROM meetings m\n            JOIN meeting_participants mp ON mp.meeting_id = m.meeting_id\n            WHERE mp.user_keycloak_id = $1\n              AND mp.status NOT IN ('declined', 'absent')\n              AND m.status NOT IN ('cancelled', 'completed')\n              AND m.scheduled_start_at < $3\n              AND m.scheduled_end_at   > $2\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "title",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 1,
+        "name": "scheduled_start_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "scheduled_end_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "9ddbccf845051bc97920ffbc62ed449f7018d395160c3a8ef9ba571c1c41f22b"
+}

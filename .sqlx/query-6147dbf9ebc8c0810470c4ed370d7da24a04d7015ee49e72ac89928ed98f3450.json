@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO meeting_participants\n                (meeting_participant_id, meeting_id, user_keycloak_id, role, status)\n            VALUES ($1,$2,$3,'participant','invited')\n            ON CONFLICT (meeting_id, user_keycloak_id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6147dbf9ebc8c0810470c4ed370d7da24a04d7015ee49e72ac89928ed98f3450"
+}

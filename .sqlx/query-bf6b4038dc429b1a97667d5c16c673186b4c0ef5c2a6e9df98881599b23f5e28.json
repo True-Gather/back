@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO meetings (\n            meeting_id, host_keycloak_id, title, description,\n            meeting_type, status,\n            scheduled_start_at, scheduled_end_at,\n            ai_enabled\n        ) VALUES ($1,$2,$3,$4,'scheduled','scheduled',$5,$6,$7)\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "Varchar",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bf6b4038dc429b1a97667d5c16c673186b4c0ef5c2a6e9df98881599b23f5e28"
+}
