@@ -3427,6 +3427,7 @@ dependencies = [
  "hmac",
  "http",
  "openidconnect",
+ "rand 0.8.5",
  "reqwest 0.13.2",
  "serde",
  "serde_json",

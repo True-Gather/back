@@ -161,9 +161,17 @@ pub async fn exchange_code_for_tokens(
     code: &str,
     pkce_verifier: &str,
 ) -> AppResult<TokenResponse> {
+    // Construction de l'endpoint token — utilise l'URL interne Docker si disponible.
+    let issuer = state
+        .config
+        .keycloak
+        .issuer_url_internal
+        .as_deref()
+        .unwrap_or(&state.config.keycloak.issuer_url);
+
     let token_endpoint = format!(
         "{}/protocol/openid-connect/token",
-        state.config.keycloak.issuer_url
+        issuer
     );
 
     let form_fields = vec![
@@ -214,10 +222,17 @@ pub async fn exchange_code_for_tokens(
 //
 // Cette fonction utilise l'access token obtenu après l'échange du code.
 pub async fn fetch_userinfo(state: &AppState, access_token: &str) -> AppResult<UserInfoClaims> {
-    // Construction de l'endpoint userinfo.
+    // Construction de l'endpoint userinfo — utilise l'URL interne Docker si disponible.
+    let issuer = state
+        .config
+        .keycloak
+        .issuer_url_internal
+        .as_deref()
+        .unwrap_or(&state.config.keycloak.issuer_url);
+
     let userinfo_endpoint = format!(
         "{}/protocol/openid-connect/userinfo",
-        state.config.keycloak.issuer_url
+        issuer
     );
 
     let response = state

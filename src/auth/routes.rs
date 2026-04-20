@@ -20,4 +20,6 @@ pub fn router() -> Router<crate::state::AppState> {
         .route("/password", put(handlers::change_password))
         // Mise à jour du profil (prénom, nom de famille).
         .route("/me", put(handlers::update_profile))
+        // Vérification d'email après inscription.
+        .route("/verify-email", get(handlers::verify_email))
 }
