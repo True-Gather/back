@@ -1,0 +1,81 @@
+name: Branches Neon par Pull Request
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Ce workflow gère automatiquement les branches Neon (copies isolées de la BDD)
+# pour chaque Pull Request ouverte sur la branche main.
+#
+# Fonctionnement :
+#   - PR ouverte ou mise à jour  →  création d'une branche Neon dédiée
+#                                    + exécution des migrations dessus
+#   - PR fermée ou fusionnée     →  suppression automatique de la branche Neon
+#
+# Avantage : les migrations sont testées sur une vraie copie de la base de
+# production sans jamais toucher celle-ci. Si une migration est bugguée,
+# seule la branche temporaire est affectée.
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  pull_request:
+    branches:
+      - main
+    # Déclenchement sur ouverture, mise à jour, réouverture et fermeture de PR
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 1 : Création de la branche Neon et test des migrations
+  # S'exécute uniquement quand la PR est ouverte, mise à jour ou réouverte
+  # ──────────────────────────────────────────────────────────────────────────
+  setup-neon-branch:
+    name: Créer branche Neon et tester les migrations
+    runs-on: ubuntu-latest
+    if: github.event.action != 'closed'
+    steps:
+      - name: Récupération du code source
+        uses: actions/checkout@v4
+
+      # Création d'une branche Neon nommée d'après la PR (ex: pr-42)
+      # La branche est une copie complète de la branche 'production' de Neon
+      - name: Créer la branche Neon pour cette PR
+        uses: neondatabase/create-branch-action@v5
+        id: neon-branch
+        with:
+          project_id: ${{ secrets.NEON_PROJECT_ID }}
+          # Nom de la branche : pr-<numéro de PR> pour identification facile
+          branch_name: pr-${{ github.event.pull_request.number }}
+          # La branche est créée à partir de la branche de production
+          parent: production
+          api_key: ${{ secrets.NEON_API_KEY }}
+
+      # Installation de sqlx-cli avec support TLS natif (requis par Neon)
+      - name: Installation de sqlx-cli (PostgreSQL + TLS natif)
+        run: cargo install sqlx-cli --no-default-features --features postgres,native-tls
+
+      # Application des migrations SQLx sur la branche Neon temporaire
+      # Si une migration échoue ici, la PR ne peut pas être fusionnée
+      - name: Tester les migrations sur la branche Neon
+        env:
+          # DATABASE_URL pointe vers la connexion directe de la branche temporaire
+          DATABASE_URL: ${{ steps.neon-branch.outputs.db_url }}
+        run: sqlx migrate run --source ./migrations
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 2 : Suppression de la branche Neon à la fermeture de la PR
+  # S'exécute uniquement quand la PR est fermée (fusionnée ou abandonnée)
+  # ──────────────────────────────────────────────────────────────────────────
+  delete-neon-branch:
+    name: Supprimer la branche Neon après fermeture de la PR
+    runs-on: ubuntu-latest
+    if: github.event.action == 'closed'
+    steps:
+      # Suppression de la branche Neon temporaire pour libérer les ressources
+      - name: Supprimer la branche Neon pr-${{ github.event.pull_request.number }}
+        uses: neondatabase/delete-branch-action@v3
+        with:
+          project_id: ${{ secrets.NEON_PROJECT_ID }}
+          branch: pr-${{ github.event.pull_request.number }}
+          api_key: ${{ secrets.NEON_API_KEY }}
