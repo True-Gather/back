@@ -22,7 +22,7 @@ config = "0.15"
 dotenvy = "0.15"
 
 # Client HTTP pour parler plus tard à Keycloak.
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "form"] }
 
 # Validation des payloads.
 validator = { version = "0.20", features = ["derive"] }

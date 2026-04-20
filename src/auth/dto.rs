@@ -59,3 +59,30 @@ pub struct SessionSnapshotResponse {
     pub authenticated: bool,
     pub user: Option<crate::models::UserProfileView>,
 }
+
+// Payload de changement de mot de passe (utilisateur connecté).
+#[derive(Debug, Deserialize, Validate)]
+pub struct ChangePasswordRequest {
+    #[validate(length(min = 1, message = "Le mot de passe actuel est requis"))]
+    pub current_password: String,
+
+    #[validate(length(
+        min = 14,
+        message = "Le nouveau mot de passe doit contenir au moins 14 caractères"
+    ))]
+    pub new_password: String,
+
+    #[validate(length(min = 1, message = "La confirmation du mot de passe est requise"))]
+    pub confirm_password: String,
+}
+
+// Payload de mise à jour du profil (prénom et/ou nom de famille).
+// Au moins un des deux champs doit être fourni — la validation est faite dans le handler.
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateProfileRequest {
+    #[validate(length(max = 64, message = "Le prénom ne peut pas dépasser 64 caractères"))]
+    pub first_name: Option<String>,
+
+    #[validate(length(max = 64, message = "Le nom ne peut pas dépasser 64 caractères"))]
+    pub last_name: Option<String>,
+}
