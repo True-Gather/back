@@ -36,6 +36,9 @@ pub struct FrontendConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct KeycloakConfig {
     pub issuer_url: String,
+    // URL interne Keycloak utilisée par le backend en Docker (ex: http://keycloak:8080/...).
+    // Différente de issuer_url qui est l'URL publique vue par le navigateur.
+    pub issuer_url_internal: Option<String>,
     pub client_id: String,
     pub client_secret: Option<String>,
 }
