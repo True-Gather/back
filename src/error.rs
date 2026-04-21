@@ -57,6 +57,7 @@ pub enum AppError {
 // Conversion d'une erreur applicative vers une réponse HTTP JSON.
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        println!("APP ERROR => {:?}", self);
         let status = match &self {
             AppError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
@@ -94,5 +95,10 @@ impl From<ValidationErrors> for AppError {
 impl From<reqwest::Error> for AppError {
     fn from(value: reqwest::Error) -> Self {
         Self::Upstream(value.to_string())
+    }
+}
+impl From<sqlx::Error> for AppError {
+    fn from(err: sqlx::Error) -> Self {
+        AppError::Internal(format!("Database error: {}", err))
     }
 }
