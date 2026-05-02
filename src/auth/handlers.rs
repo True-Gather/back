@@ -687,12 +687,8 @@ pub async fn update_profile(
 // Flux :
 //   1. Lit le token depuis la query string.
 //   2. Hashe le token et cherche dans Redis.
-//   3. Si valide : marque email_verified=true.
-//   4. Redirige vers la page frontend de confirmation.
-//
-// Important : on ne crée pas de session ici. La session applicative doit être
-// créée par le callback OIDC après une vraie connexion Keycloak, afin de
-// conserver l'id_token nécessaire au logout OIDC.
+//   3. Si valide : marque email_verified=true, crée la session, pose le cookie.
+//   4. Redirige vers le dashboard (session active) ou une page d'erreur.
 pub async fn verify_email(
     State(state): State<AppState>,
     Query(query): Query<VerifyEmailQuery>,
@@ -714,30 +710,43 @@ pub async fn verify_email(
         return Ok(Redirect::to(&redirect_url).into_response());
     };
 
-    // Marquer l'email comme vérifié.
-    let user_exists = {
+    // Marquer l'email comme vérifié + récupérer l'utilisateur pour créer la session.
+    let maybe_user = {
         let mut users = state.users.write().await;
         if let Some(user) = users.get_mut(&user_id) {
             user.email_verified = true;
-            true
+            Some(user.clone())
         } else {
-            false
+            None
         }
     };
 
-    if !user_exists {
+    let Some(user) = maybe_user else {
         return Ok(Redirect::to(&format!(
             "{}/auth/verify-email?error=user_not_found",
             state.config.frontend.base_url.trim_end_matches('/')
         )).into_response());
-    }
+    };
 
-    tracing::info!(user_id = %user_id, "Email vérifié avec succès");
+    tracing::info!(user_id = %user_id, "Email vérifié avec succès — création de session");
 
-    let redirect_url = format!(
-        "{}/auth/verify-email?verified=1",
-        state.config.frontend.base_url.trim_end_matches('/')
+    // Création de la session maintenant que l'email est vérifié.
+    let session_id = crate::auth::session::create_session(&state, &user, None).await?;
+
+    let cookie_value = crate::auth::session::build_session_cookie(
+        &state.config.auth.cookie_name,
+        &session_id,
+        state.config.auth.cookie_secure,
     );
 
-    Ok(Redirect::to(&redirect_url).into_response())
+    // Redirection vers le dashboard avec le cookie de session posé.
+    let mut response = Redirect::to(&state.config.frontend_post_login_url()).into_response();
+
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie_value)
+            .map_err(|e| AppError::Internal(format!("Invalid Set-Cookie header: {e}")))?,
+    );
+
+    Ok(response)
 }
