@@ -86,9 +86,3 @@ pub struct UpdateProfileRequest {
     #[validate(length(max = 64, message = "Le nom ne peut pas dépasser 64 caractères"))]
     pub last_name: Option<String>,
 }
-
-// Query string du callback de vérification d'email.
-#[derive(Debug, Deserialize)]
-pub struct VerifyEmailQuery {
-    pub token: Option<String>,
-}

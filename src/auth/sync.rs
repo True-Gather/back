@@ -33,12 +33,10 @@ fn build_display_name(userinfo: &UserInfoClaims) -> String {
 }
 
 // Crée ou met à jour un utilisateur local à partir du profil Keycloak.
-//
-// Retourne `(User, bool)` où le bool indique si l'utilisateur vient d'être créé.
 pub async fn sync_user_from_keycloak(
     state: &AppState,
     userinfo: &UserInfoClaims,
-) -> AppResult<(User, bool)> {
+) -> AppResult<User> {
     let keycloak_sub = userinfo.sub.trim().to_string();
 
     if keycloak_sub.is_empty() {
@@ -71,12 +69,8 @@ pub async fn sync_user_from_keycloak(
             existing_user.last_name = last_name;
             existing_user.updated_at = now;
             existing_user.last_login_at = Some(now);
-            // Si Keycloak confirme la vérification, on l'entérine (jamais de retour en arrière).
-            if userinfo.email_verified.unwrap_or(false) {
-                existing_user.email_verified = true;
-            }
 
-            return Ok((existing_user.clone(), false));
+            return Ok(existing_user.clone());
         }
     }
 
@@ -88,8 +82,6 @@ pub async fn sync_user_from_keycloak(
         display_name,
         first_name,
         last_name,
-        // Reprend le statut Keycloak — si Keycloak a déjà vérifié l'email, on l'accepte.
-        email_verified: userinfo.email_verified.unwrap_or(false),
         created_at: now,
         updated_at: now,
         last_login_at: Some(now),
@@ -105,5 +97,5 @@ pub async fn sync_user_from_keycloak(
         users_by_keycloak_sub.insert(keycloak_sub, new_user.id);
     }
 
-    Ok((new_user, true))
+    Ok(new_user)
 }

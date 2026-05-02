@@ -24,7 +24,7 @@ use validator::Validate;
 use crate::{
     auth::dto::{
         AuthCallbackQuery, ChangePasswordRequest, ForgotPasswordRequest, MessageResponse,
-        ResetPasswordRequest, SessionSnapshotResponse, UpdateProfileRequest, VerifyEmailQuery,
+        ResetPasswordRequest, SessionSnapshotResponse, UpdateProfileRequest,
     },
     error::{AppError, AppResult},
     models::UserProfileView,
@@ -147,53 +147,9 @@ pub async fn auth_callback(
     let userinfo = crate::auth::oidc::fetch_userinfo(&state, &token_response.access_token).await?;
 
     // Sync user local
-    let (local_user, is_new) = crate::auth::sync::sync_user_from_keycloak(&state, &userinfo).await?;
+    let local_user = crate::auth::sync::sync_user_from_keycloak(&state, &userinfo).await?;
 
-    // Si c'est une première inscription, on envoie un email de vérification.
-    // On ne se fie pas à email_verified de Keycloak (en dev il est souvent true par défaut).
-    if is_new {
-        let token = crate::auth::email_verification::generate_token();
-        let token_hash = crate::auth::email_verification::hash_token(&token);
-
-        // Stockage du hash dans Redis (TTL 15 min).
-        if let Err(e) = crate::auth::email_verification::store_verification_token(
-            &state.redis,
-            &token_hash,
-            local_user.id,
-        )
-        .await
-        {
-            tracing::warn!("Impossible de stocker le token de vérification : {e}");
-        } else {
-            let verify_url = format!(
-                "{}/api/v1/auth/verify-email?token={}",
-                state.config.backend.base_url, token
-            );
-            let display_name = local_user.first_name.as_deref().unwrap_or(&local_user.display_name);
-
-            if let Err(e) = crate::mail::send_verification_email(
-                &local_user.email,
-                display_name,
-                &verify_url,
-            )
-            .await
-            {
-                tracing::warn!(
-                    email = local_user.email.as_str(),
-                    "Échec envoi email de vérification : {e}"
-                );
-            }
-        }
-
-        // Pas de session créée : l'utilisateur doit vérifier son email avant d'accéder au dashboard.
-        let pending_url = format!(
-            "{}/auth/verify-email?pending=1",
-            state.config.frontend.base_url.trim_end_matches('/')
-        );
-        return Ok(Redirect::to(&pending_url).into_response());
-    }
-
-    // Création session (uniquement pour les utilisateurs déjà existants)
+    // Création session
     let session_id = crate::auth::session::create_session(&state, &local_user, Some(id_token.clone())).await?;
 
     let cookie_value = crate::auth::session::build_session_cookie(
@@ -680,73 +636,4 @@ pub async fn update_profile(
         first_name: new_first,
         last_name: new_last,
     }))
-}
-
-// Vérification d'email via le token reçu par email.
-//
-// Flux :
-//   1. Lit le token depuis la query string.
-//   2. Hashe le token et cherche dans Redis.
-//   3. Si valide : marque email_verified=true, crée la session, pose le cookie.
-//   4. Redirige vers le dashboard (session active) ou une page d'erreur.
-pub async fn verify_email(
-    State(state): State<AppState>,
-    Query(query): Query<VerifyEmailQuery>,
-) -> AppResult<Response> {
-    let token = query
-        .token
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| AppError::BadRequest("Token de vérification manquant".to_string()))?;
-
-    let maybe_user_id =
-        crate::auth::email_verification::verify_and_consume_token(&state.redis, &token).await?;
-
-    let Some(user_id) = maybe_user_id else {
-        // Token invalide ou expiré — redirection vers le frontend avec erreur.
-        let redirect_url = format!(
-            "{}/auth/verify-email?error=invalid_token",
-            state.config.frontend.base_url.trim_end_matches('/')
-        );
-        return Ok(Redirect::to(&redirect_url).into_response());
-    };
-
-    // Marquer l'email comme vérifié + récupérer l'utilisateur pour créer la session.
-    let maybe_user = {
-        let mut users = state.users.write().await;
-        if let Some(user) = users.get_mut(&user_id) {
-            user.email_verified = true;
-            Some(user.clone())
-        } else {
-            None
-        }
-    };
-
-    let Some(user) = maybe_user else {
-        return Ok(Redirect::to(&format!(
-            "{}/auth/verify-email?error=user_not_found",
-            state.config.frontend.base_url.trim_end_matches('/')
-        )).into_response());
-    };
-
-    tracing::info!(user_id = %user_id, "Email vérifié avec succès — création de session");
-
-    // Création de la session maintenant que l'email est vérifié.
-    let session_id = crate::auth::session::create_session(&state, &user, None).await?;
-
-    let cookie_value = crate::auth::session::build_session_cookie(
-        &state.config.auth.cookie_name,
-        &session_id,
-        state.config.auth.cookie_secure,
-    );
-
-    // Redirection vers le dashboard avec le cookie de session posé.
-    let mut response = Redirect::to(&state.config.frontend_post_login_url()).into_response();
-
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&cookie_value)
-            .map_err(|e| AppError::Internal(format!("Invalid Set-Cookie header: {e}")))?,
-    );
-
-    Ok(response)
 }

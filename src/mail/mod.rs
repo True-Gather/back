@@ -12,4 +12,4 @@ pub mod templates;
 pub use service::send_email;
 pub use service::send_password_changed_email;
 pub use service::send_profile_changed_email;
-pub use service::send_verification_email;
+

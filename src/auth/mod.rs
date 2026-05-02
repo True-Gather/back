@@ -1,7 +1,6 @@
 // Module auth.
 
 pub mod dto;
-pub mod email_verification;
 pub mod handlers;
 pub mod middleware;
 pub mod oidc;
