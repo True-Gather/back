@@ -102,9 +102,16 @@ pub async fn prepare_authorization_redirect(
     let redirect_uri = state.config.auth_callback_url();
 
     let registration_part = if is_registration {
-        "&kc_action=register"
+        // Force Keycloak à réafficher l'écran au lieu de réutiliser une
+        // session SSO existante, sinon "Créer un compte" peut reconnecter
+        // directement l'utilisateur courant et revenir au dashboard.
+        "&prompt=login&kc_action=register"
     } else {
-        ""
+        // Force Keycloak à demander les identifiants même si une session SSO
+        // est active. Sans ça, si le backend redémarre (sessions en mémoire
+        // perdues), l'utilisateur voit la page d'accueil alors que Keycloak
+        // le reconnecte silencieusement au clic "Se connecter".
+        "&prompt=login"
     };
 
     let authorization_url = format!(
@@ -128,7 +135,7 @@ pub async fn prepare_authorization_redirect(
 // pas appelée via fetch côté front.
 pub fn build_logout_redirect_url(
     state: &AppState,
-    id_token_hint: &str,
+    id_token_hint: Option<&str>,
 ) -> String {
     let logout_endpoint = format!(
         "{}/protocol/openid-connect/logout",
@@ -137,20 +144,23 @@ pub fn build_logout_redirect_url(
 
     let post_logout_redirect_uri = state.config.frontend_post_logout_url();
 
-    let query_parts = vec![
+    let mut query_parts = vec![
         format!(
             "post_logout_redirect_uri={}",
             urlencoding::encode(&post_logout_redirect_uri)
-        ),
-        format!(
-            "id_token_hint={}",
-            urlencoding::encode(id_token_hint)
         ),
         format!(
             "client_id={}",
             urlencoding::encode(&state.config.keycloak.client_id)
         ),
     ];
+
+    if let Some(id_token_hint) = id_token_hint {
+        query_parts.push(format!(
+            "id_token_hint={}",
+            urlencoding::encode(id_token_hint)
+        ));
+    }
 
     format!("{}?{}", logout_endpoint, query_parts.join("&"))
 }
@@ -161,9 +171,17 @@ pub async fn exchange_code_for_tokens(
     code: &str,
     pkce_verifier: &str,
 ) -> AppResult<TokenResponse> {
+    // Construction de l'endpoint token — utilise l'URL interne Docker si disponible.
+    let issuer = state
+        .config
+        .keycloak
+        .issuer_url_internal
+        .as_deref()
+        .unwrap_or(&state.config.keycloak.issuer_url);
+
     let token_endpoint = format!(
         "{}/protocol/openid-connect/token",
-        state.config.keycloak.issuer_url
+        issuer
     );
 
     let form_fields = vec![
@@ -214,10 +232,17 @@ pub async fn exchange_code_for_tokens(
 //
 // Cette fonction utilise l'access token obtenu après l'échange du code.
 pub async fn fetch_userinfo(state: &AppState, access_token: &str) -> AppResult<UserInfoClaims> {
-    // Construction de l'endpoint userinfo.
+    // Construction de l'endpoint userinfo — utilise l'URL interne Docker si disponible.
+    let issuer = state
+        .config
+        .keycloak
+        .issuer_url_internal
+        .as_deref()
+        .unwrap_or(&state.config.keycloak.issuer_url);
+
     let userinfo_endpoint = format!(
         "{}/protocol/openid-connect/userinfo",
-        state.config.keycloak.issuer_url
+        issuer
     );
 
     let response = state

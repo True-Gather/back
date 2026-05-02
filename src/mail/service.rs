@@ -189,3 +189,19 @@ pub async fn send_profile_changed_email(to: &str, username: &str) {
         }
     }
 }
+
+/// Envoie un email de vérification d'adresse email lors de l'inscription.
+///
+/// Contrairement aux autres fonctions métier, celle-ci **retourne une erreur**
+/// si l'envoi échoue — l'inscription ne doit pas se terminer silencieusement
+/// sans que l'utilisateur reçoive son lien de vérification.
+///
+/// # Arguments
+/// * `to`         - Adresse email du destinataire
+/// * `username`   - Prénom ou nom d'affichage (personnalisation)
+/// * `verify_url` - Lien complet de vérification (avec token en clair)
+pub async fn send_verification_email(to: &str, username: &str, verify_url: &str) -> Result<(), String> {
+    let html = templates::email_verification_template(username, verify_url);
+    let subject = "Vérifiez votre adresse email TrueGather";
+    send_email(to, subject, &html).await
+}
