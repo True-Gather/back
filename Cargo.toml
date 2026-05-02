@@ -22,7 +22,7 @@ config = "0.15"
 dotenvy = "0.15"
 
 # Client HTTP pour parler plus tard à Keycloak.
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "form"] }
 
 # Validation des payloads.
 validator = { version = "0.20", features = ["derive"] }
@@ -50,6 +50,9 @@ http = "1"
 sha2 = "0.10"
 base64 = "0.22"
 hmac = "0.12"
+
+# Génération de nombres aléatoires sécurisés (tokens de vérification).
+rand = "0.8"
 
 # Client Redis asynchrone avec pool de connexions.
 deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
