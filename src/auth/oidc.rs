@@ -102,7 +102,10 @@ pub async fn prepare_authorization_redirect(
     let redirect_uri = state.config.auth_callback_url();
 
     let registration_part = if is_registration {
-        "&kc_action=register"
+        // Force Keycloak à réafficher l'écran au lieu de réutiliser une
+        // session SSO existante, sinon "Créer un compte" peut reconnecter
+        // directement l'utilisateur courant et revenir au dashboard.
+        "&prompt=login&kc_action=register"
     } else {
         ""
     };
