@@ -300,10 +300,9 @@ pub async fn reset_password(
 // Flux :
 //   1. Extrait et valide la session depuis le cookie tg_session.
 //   2. Valide le payload (14 caractères min, correspondance confirmation).
-//   3. Vérifie le mot de passe actuel via le flow ROPC Keycloak.
-//   4. Obtient un token admin (client_credentials).
-//   5. Appelle l'API admin Keycloak pour mettre à jour le mot de passe.
-//   6. Envoie un email de confirmation (non bloquant).
+//   3. Obtient un token admin (client_credentials).
+//   4. Appelle l'API admin Keycloak pour mettre à jour le mot de passe.
+//   5. Envoie un email de confirmation (non bloquant).
 pub async fn change_password(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -344,40 +343,9 @@ pub async fn change_password(
         .trim_end_matches('/')
         .trim_end_matches("/realms/truegather");
 
-    // Étape 1 : vérifier le mot de passe actuel via ROPC.
     let token_url = format!("{}/realms/truegather/protocol/openid-connect/token", realm_base);
 
-    let ropc_params = [
-        ("grant_type", "password"),
-        ("client_id", state.config.keycloak.client_id.as_str()),
-        (
-            "client_secret",
-            state
-                .config
-                .keycloak
-                .client_secret
-                .as_deref()
-                .unwrap_or(""),
-        ),
-        ("username", session.email.as_str()),
-        ("password", payload.current_password.as_str()),
-    ];
-
-    let ropc_resp = state
-        .http_client
-        .post(&token_url)
-        .form(&ropc_params)
-        .send()
-        .await
-        .map_err(|e| AppError::Upstream(format!("Keycloak ROPC request failed: {e}")))?;
-
-    if !ropc_resp.status().is_success() {
-        return Err(AppError::BadRequest(
-            "Mot de passe actuel incorrect".to_string(),
-        ));
-    }
-
-    // Étape 2 : obtenir un token admin via client_credentials.
+    // Obtention d'un token admin via client_credentials.
     let admin_params = [
         ("grant_type", "client_credentials"),
         ("client_id", state.config.keycloak.client_id.as_str()),

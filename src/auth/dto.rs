@@ -63,9 +63,6 @@ pub struct SessionSnapshotResponse {
 // Payload de changement de mot de passe (utilisateur connecté).
 #[derive(Debug, Deserialize, Validate)]
 pub struct ChangePasswordRequest {
-    #[validate(length(min = 1, message = "Le mot de passe actuel est requis"))]
-    pub current_password: String,
-
     #[validate(length(
         min = 14,
         message = "Le nouveau mot de passe doit contenir au moins 14 caractères"
