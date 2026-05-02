@@ -131,7 +131,7 @@ pub async fn prepare_authorization_redirect(
 // pas appelée via fetch côté front.
 pub fn build_logout_redirect_url(
     state: &AppState,
-    id_token_hint: &str,
+    id_token_hint: Option<&str>,
 ) -> String {
     let logout_endpoint = format!(
         "{}/protocol/openid-connect/logout",
@@ -140,20 +140,23 @@ pub fn build_logout_redirect_url(
 
     let post_logout_redirect_uri = state.config.frontend_post_logout_url();
 
-    let query_parts = vec![
+    let mut query_parts = vec![
         format!(
             "post_logout_redirect_uri={}",
             urlencoding::encode(&post_logout_redirect_uri)
-        ),
-        format!(
-            "id_token_hint={}",
-            urlencoding::encode(id_token_hint)
         ),
         format!(
             "client_id={}",
             urlencoding::encode(&state.config.keycloak.client_id)
         ),
     ];
+
+    if let Some(id_token_hint) = id_token_hint {
+        query_parts.push(format!(
+            "id_token_hint={}",
+            urlencoding::encode(id_token_hint)
+        ));
+    }
 
     format!("{}?{}", logout_endpoint, query_parts.join("&"))
 }

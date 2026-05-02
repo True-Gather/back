@@ -288,14 +288,11 @@ pub async fn logout(
         state.config.auth.cookie_secure,
     );
 
-    let redirect_target = if let Some(id_token) = maybe_id_token.as_deref() {
-        crate::auth::oidc::build_logout_redirect_url(&state, id_token)
-    } else {
-        state.config.frontend_post_logout_url()
-    };
+    let redirect_target =
+        crate::auth::oidc::build_logout_redirect_url(&state, maybe_id_token.as_deref());
 
     tracing::info!(
-        "LOGOUT redirect prepared (oidc_logout={})",
+        "LOGOUT redirect prepared (has_id_token_hint={})",
         maybe_id_token.is_some()
     );
     let mut response = Redirect::to(&redirect_target).into_response();
