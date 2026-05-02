@@ -151,7 +151,11 @@ pub async fn auth_callback(
 
     // Si c'est une première inscription, on envoie un email de vérification.
     // On ne se fie pas à email_verified de Keycloak (en dev il est souvent true par défaut).
-    if is_new {
+    //
+    // Important : au redémarrage du backend, le store utilisateur en mémoire est vide.
+    // Un login d'un utilisateur Keycloak existant peut donc ressortir `is_new=true`.
+    // On ne déclenche la vérification email que pour le parcours inscription.
+    if pending_request.is_registration && is_new {
         let token = crate::auth::email_verification::generate_token();
         let token_hash = crate::auth::email_verification::hash_token(&token);
 
