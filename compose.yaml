@@ -1,0 +1,116 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: truegather-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tg_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tg_password}
+      POSTGRES_DB: ${POSTGRES_DB:-truegather}
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tg_user -d truegather"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: truegather-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@truegather.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin123}
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7
+    container_name: truegather-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.5.5
+    container_name: truegather-keycloak
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: ${POSTGRES_USER:-tg_user}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-tg_password}
+      KC_HTTP_PORT: 8080
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 8081
+      KC_HOSTNAME_STRICT: false
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./keycloak/import:/opt/keycloak/data/import
+      - ./keycloak/themes:/opt/keycloak/themes
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: truegather-backend
+    restart: unless-stopped
+    environment:
+      APP__SERVER__HOST: 0.0.0.0
+      APP__SERVER__PORT: 8080
+      KC_HOSTNAME: http://localhost:8081
+
+      APP__DATABASE__URL: postgres://${POSTGRES_USER:-tg_user}:${POSTGRES_PASSWORD:-tg_password}@postgres:5432/${POSTGRES_DB:-truegather}
+      APP__REDIS__URL: redis://redis:6379
+      
+      APP__KEYCLOAK__ISSUER_URL_INTERNAL: http://host.docker.internal:8081/realms/truegather
+      APP__KEYCLOAK__ISSUER_URL_PUBLIC: http://localhost:8081/realms/truegather
+      APP__KEYCLOAK__CLIENT_ID: truegather-backend
+      APP__KEYCLOAK__CLIENT_SECRET: ${APP__KEYCLOAK__CLIENT_SECRET:-ton_secret}
+      
+      APP__BACKEND__BASE_URL: http://localhost:8080
+      APP__FRONTEND__BASE_URL: http://localhost:3000
+      
+      APP__AUTH__COOKIE_NAME: tg_session
+      APP__AUTH__COOKIE_SECURE: "false"
+
+      # Clé API Brevo pour l'envoi d'emails transactionnels
+      APP__MAIL__BREVO_API_KEY: ${APP__MAIL__BREVO_API_KEY}
+      
+      RUST_LOG: info
+    ports:
+      - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+
+volumes:
+  postgres_data:
+  redis_data:
