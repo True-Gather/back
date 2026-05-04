@@ -6,14 +6,16 @@ pub mod config;
 pub mod error;
 pub mod mail;
 pub mod media;
+pub mod meetings;
 pub mod models;
 pub mod redis;
 pub mod state;
+pub mod webrtc_engine;
 pub mod ws;
 
 use axum::{
-    http::{header, HeaderValue, Method},
     Router,
+    http::{HeaderValue, Method, header},
 };
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -27,11 +29,16 @@ use crate::state::AppState;
 pub fn build_app(state: AppState) -> Router {
     let api_v1 = Router::new()
         .merge(api::routes::router())
-        .nest("/auth", auth::routes::router());
+        // Routes d'authentification.
+        .nest("/auth", auth::routes::router())
+        // Routes meetings.
+        .merge(meetings::routes::router());
 
     Router::new()
         .nest("/api/v1", api_v1)
         .nest_service("/uploads", ServeDir::new("uploads"))
+        // Route WebSocket de signalisation WebRTC.
+        .merge(ws::router())
         .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&state.config.frontend.base_url))
         .with_state(state)

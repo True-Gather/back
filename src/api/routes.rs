@@ -1,6 +1,6 @@
 use axum::{
-    routing::{delete, get, post},
     Router,
+    routing::{delete, get, post},
 };
 
 use crate::{
@@ -61,7 +61,7 @@ pub fn router() -> Router<AppState> {
             post(handlers::respond_to_group_invitation),
         )
 
-                // Notifications.
+        // Notifications.
         .route(
             "/notifications/mark-all-read",
             post(handlers::mark_all_notifications_as_read),

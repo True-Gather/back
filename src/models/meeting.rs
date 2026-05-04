@@ -10,7 +10,7 @@ pub struct HealthResponse {
     pub service: String,
 }
 
-// Payload de création de meeting.
+// Payload de création de meeting depuis la popup dashboard.
 #[derive(Debug, Deserialize, Validate)]
 pub struct CreateMeetingRequest {
     #[validate(length(min = 1, max = 255, message = "Meeting title is required"))]
@@ -19,38 +19,42 @@ pub struct CreateMeetingRequest {
     #[validate(length(min = 1, message = "At least one participant email is required"))]
     #[validate(custom(function = "validate_email_list"))]
     pub participant_emails: Vec<String>,
+
+    pub group_id: Option<String>,
+
+    pub ai_enabled: bool,
+    pub microphone_enabled: bool,
+    pub camera_enabled: bool,
 }
 
-// Réponse minimale de création de meeting.
+// Réponse backend après création réelle.
 #[derive(Debug, Serialize)]
 pub struct CreateMeetingResponse {
-    pub message: String,
+    pub meeting_id: String,
     pub title: String,
+    pub host_keycloak_id: String,
     pub participants_count: usize,
+    pub status: String,
 }
 
-// Structure locale utilisée pour valider un email avec le crate validator.
+// Validation locale email.
 #[derive(Debug, Validate)]
 struct EmailCheck {
     #[validate(email(message = "Invalid participant email"))]
     email: String,
 }
 
-// Valide qu'une liste d'emails est correcte.
+// Validation liste emails.
 fn validate_email_list(emails: &[String]) -> Result<(), ValidationError> {
-    // On valide chaque email de la liste.
     for email in emails {
-        // Construction d'un wrapper validable.
         let candidate = EmailCheck {
             email: email.clone(),
         };
 
-        // Si un email est invalide, on renvoie une erreur.
         if candidate.validate().is_err() {
             return Err(ValidationError::new("invalid_email"));
         }
     }
 
-    // Tout est valide.
     Ok(())
 }

@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: truegather_backend
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info,truegather_backend=debug
+      - KEYCLOAK_URL=http://keycloak:8081
+      - REDIS_URL=redis://redis:6379
+      - APP__KEYCLOAK__ISSUER_URL_INTERNAL=http://host.docker.internal:8081/realms/truegather
+      - APP__KEYCLOAK__ISSUER_URL=http://localhost:8081/realms/truegather
+      - APP__DATABASE__URL=postgres://tg_user:tg_password@truegather_db:5432/truegather
+      - APP__SMTP__HOST=smtp.gmail.com
+      - APP__SMTP__PORT=465
+      - APP__SMTP__USERNAME=adamchopper83@gmail.com
+      - APP__SMTP__PASSWORD=fmqqagriqrchdutn
+      - APP__SMTP__FROM=TrueGather <adamchopper83@gmail.com>
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - keycloak
+      - redis
+      - truegather_db
+    networks:
+      - truegather-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: truegather_redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - truegather-network
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.5.5
+    container_name: truegather_keycloak
+    command: start-dev
+    environment:
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/keycloak
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=keycloak_password
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./keycloak/themes/truegather:/opt/keycloak/themes/truegather
+    depends_on:
+      - postgres
+    networks:
+      - truegather-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: truegather_postgres
+    environment:
+      - POSTGRES_DB=keycloak
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD=keycloak_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - truegather-network
+
+  truegather_db:
+    image: postgres:15-alpine
+    container_name: truegather_db
+    environment:
+      - POSTGRES_DB=truegather
+      - POSTGRES_USER=tg_user
+      - POSTGRES_PASSWORD=tg_password
+    ports:
+      - "5435:5432"
+    volumes:
+      - truegather_db_data:/var/lib/postgresql/data
+    networks:
+      - truegather-network
+
+networks:
+  truegather-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  truegather_db_data:
