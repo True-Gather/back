@@ -171,7 +171,7 @@ pub async fn exchange_code_for_tokens(
     code: &str,
     pkce_verifier: &str,
 ) -> AppResult<TokenResponse> {
-    // Construction de l'endpoint token — utilise l'URL interne Docker si disponible.
+    // Construction de l'endpoint token — utilise l'URL interne Docker (toujours configurée).
     let issuer = &state.config.keycloak.issuer_url_internal;
 
     let token_endpoint = format!(
@@ -235,7 +235,7 @@ pub async fn exchange_code_for_tokens(
 //
 // Cette fonction utilise l'access token obtenu après l'échange du code.
 pub async fn fetch_userinfo(state: &AppState, access_token: &str) -> AppResult<UserInfoClaims> {
-    // Construction de l'endpoint userinfo — utilise l'URL interne Docker si disponible.
+    // Construction de l'endpoint userinfo — utilise l'URL interne Docker (toujours configurée).
     let issuer = &state.config.keycloak.issuer_url_internal;
 
     let userinfo_endpoint = format!(
