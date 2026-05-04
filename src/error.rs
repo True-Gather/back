@@ -106,13 +106,21 @@ impl IntoResponse for AppError {
                     AppError::ConflictParticipants(_) => unreachable!(),
                 };
 
+                let message = match &other {
+                    AppError::Database(err) => {
+                        eprintln!("Database error: {:?}", err);
+                        "Une erreur interne est survenue.".to_string()
+                    }
+                    _ => other.to_string(),
+                };
+
                 let body = ErrorBody {
                     status: status.as_u16(),
                     error: status
                         .canonical_reason()
                         .unwrap_or("Unknown error")
                         .to_string(),
-                    message: other.to_string(),
+                    message,
                 };
 
                 (status, Json(body)).into_response()
