@@ -10,6 +10,7 @@ pub mod meetings;   // ← NOUVEAU
 pub mod models;
 pub mod redis;
 pub mod state;
+pub mod webrtc_engine;
 pub mod ws;
 
 use axum::{
