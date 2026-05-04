@@ -16,7 +16,7 @@ use axum::{
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use chrono::{Duration, Utc};
 use validator::Validate;
@@ -133,6 +133,11 @@ pub async fn auth_callback(
     let claims: IdTokenClaims = serde_json::from_slice(&decoded)
         .map_err(|_| AppError::Internal("Invalid id_token payload".to_string()))?;
 
+    // Vérification du nonce OIDC.
+    //
+    // Sécurité :
+    // cela empêche qu'un token provenant d'un autre flow
+    // soit réutilisé ici.
     if claims.nonce.as_deref() != Some(&pending_request.nonce) {
         return Err(AppError::BadRequest("Invalid nonce".to_string()));
     }
@@ -235,28 +240,32 @@ pub async fn me(
         }));
     };
 
-    let maybe_response = {
+    let session = {
         let sessions = state.sessions.read().await;
-        sessions.get(&session_id).map(|session| SessionSnapshotResponse {
-            authenticated: true,
-            user: Some(UserProfileView {
-                id: session.user_id,
-                email: session.email.clone(),
-                display_name: session.display_name.clone(),
-                first_name: session.first_name.clone(),
-                last_name: session.last_name.clone(),
-            }),
-        })
+        sessions.get(&session_id).cloned()
     };
 
-    let Some(response) = maybe_response else {
+    let Some(session) = session else {
         return Ok(Json(SessionSnapshotResponse {
             authenticated: false,
             user: None,
         }));
     };
 
-    Ok(Json(response))
+    // Construction de la vue user pour le frontend.
+    let user = UserProfileView {
+        id: session.user_id,
+        email: session.email,
+        display_name: session.display_name,
+        first_name: session.first_name,
+        last_name: session.last_name,
+        profile_photo_url: session.profile_photo_url,
+    };
+
+    Ok(Json(SessionSnapshotResponse {
+        authenticated: true,
+        user: Some(user),
+    }))
 }
 
 // Déconnexion applicative + logout OIDC.
@@ -299,6 +308,7 @@ pub async fn logout(
         "LOGOUT redirect prepared (has_id_token_hint={})",
         maybe_id_token.is_some()
     );
+
     let mut response = Redirect::to(&redirect_target).into_response();
 
     response.headers_mut().insert(
@@ -340,15 +350,70 @@ pub async fn reset_password(
     }))
 }
 
+
+// Payload pour la mise à jour de l'avatar.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UpdateAvatarRequest {
+    // Base64 data URL (ex. "data:image/png;base64,...") ou null pour supprimer.
+    pub avatar_url: Option<String>,
+}
+
+// Met à jour la photo de profil de l'utilisateur connecté.
+//
+// Persiste la valeur en base PostgreSQL et met à jour la session mémoire.
+pub async fn update_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateAvatarRequest>,
+) -> AppResult<Json<MessageResponse>> {
+    // Extraction de la session.
+    let session_id = crate::auth::session::extract_session_id_from_headers(
+        &headers,
+        &state.config.auth.cookie_name,
+    )
+    .ok_or_else(|| AppError::Unauthorized)?;
+
+    let session = {
+        let sessions = state.sessions.read().await;
+        sessions.get(&session_id).cloned()
+    }
+    .ok_or_else(|| AppError::Unauthorized)?;
+
+    // Mise à jour en base.
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET profile_photo_url = $1, updated_at = NOW()
+        WHERE keycloak_id = $2
+        "#,
+    )
+    .bind(&payload.avatar_url)
+    .bind(&session.keycloak_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("DB avatar update error: {}", e)))?;
+
+    // Mise à jour de la session mémoire.
+    {
+        let mut sessions = state.sessions.write().await;
+        if let Some(s) = sessions.get_mut(&session_id) {
+            s.profile_photo_url = payload.avatar_url;
+        }
+    }
+
+    Ok(Json(MessageResponse {
+        message: "Avatar updated".to_string(),
+    }))
+}
+
 // Changement de mot de passe pour un utilisateur connecté.
 //
 // Flux :
 //   1. Extrait et valide la session depuis le cookie tg_session.
 //   2. Valide le payload (14 caractères min, correspondance confirmation).
-//   3. Vérifie le mot de passe actuel via le flow ROPC Keycloak.
-//   4. Obtient un token admin (client_credentials).
-//   5. Appelle l'API admin Keycloak pour mettre à jour le mot de passe.
-//   6. Envoie un email de confirmation (non bloquant).
+//   3. Obtient un token admin (client_credentials).
+//   4. Appelle l'API admin Keycloak pour mettre à jour le mot de passe.
+//   5. Envoie un email de confirmation (non bloquant).
 pub async fn change_password(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -378,51 +443,15 @@ pub async fn change_password(
     .ok_or(AppError::Unauthorized)?;
 
     // Construction de l'URL du realm Keycloak.
-    let issuer = state
-        .config
-        .keycloak
-        .issuer_url_internal
-        .as_deref()
-        .unwrap_or(&state.config.keycloak.issuer_url);
+    let issuer = &state.config.keycloak.issuer_url_internal;
 
     let realm_base = issuer
         .trim_end_matches('/')
         .trim_end_matches("/realms/truegather");
 
-    // Étape 1 : vérifier le mot de passe actuel via ROPC.
     let token_url = format!("{}/realms/truegather/protocol/openid-connect/token", realm_base);
 
-    let ropc_params = [
-        ("grant_type", "password"),
-        ("client_id", state.config.keycloak.client_id.as_str()),
-        (
-            "client_secret",
-            state
-                .config
-                .keycloak
-                .client_secret
-                .as_deref()
-                .unwrap_or(""),
-        ),
-        ("username", session.email.as_str()),
-        ("password", payload.current_password.as_str()),
-    ];
-
-    let ropc_resp = state
-        .http_client
-        .post(&token_url)
-        .form(&ropc_params)
-        .send()
-        .await
-        .map_err(|e| AppError::Upstream(format!("Keycloak ROPC request failed: {e}")))?;
-
-    if !ropc_resp.status().is_success() {
-        return Err(AppError::BadRequest(
-            "Mot de passe actuel incorrect".to_string(),
-        ));
-    }
-
-    // Étape 2 : obtenir un token admin via client_credentials.
+    // Obtention d'un token admin via client_credentials.
     let admin_params = [
         ("grant_type", "client_credentials"),
         ("client_id", state.config.keycloak.client_id.as_str()),
@@ -461,10 +490,10 @@ pub async fn change_password(
         .ok_or_else(|| AppError::Internal("Missing access_token in admin response".to_string()))?
         .to_string();
 
-    // Étape 3 : mettre à jour le mot de passe via l'API admin Keycloak.
+    // Mise à jour du mot de passe via l'API admin Keycloak.
     let reset_url = format!(
         "{}/admin/realms/truegather/users/{}/reset-password",
-        realm_base, session.keycloak_sub
+        realm_base, session.keycloak_id
     );
 
     let reset_body = serde_json::json!({
@@ -493,7 +522,7 @@ pub async fn change_password(
         )));
     }
 
-    // Étape 4 : envoi d'un email de confirmation (non bloquant).
+    // Envoi d'un email de confirmation (non bloquant).
     // Si l'envoi échoue, le changement de mot de passe reste valide.
     let display_name = session
         .first_name
@@ -548,12 +577,7 @@ pub async fn update_profile(
     .ok_or(AppError::Unauthorized)?;
 
     // Construction de l'URL de base Keycloak.
-    let issuer = state
-        .config
-        .keycloak
-        .issuer_url_internal
-        .as_deref()
-        .unwrap_or(&state.config.keycloak.issuer_url);
+    let issuer = &state.config.keycloak.issuer_url_internal;
 
     let realm_base = issuer
         .trim_end_matches('/')
@@ -603,7 +627,7 @@ pub async fn update_profile(
     // Mise à jour via l'API admin Keycloak.
     let update_url = format!(
         "{}/admin/realms/truegather/users/{}",
-        realm_base, session.keycloak_sub
+        realm_base, session.keycloak_id
     );
 
     let mut update_body = serde_json::Map::new();
@@ -680,6 +704,7 @@ pub async fn update_profile(
         display_name: new_display_name,
         first_name: new_first,
         last_name: new_last,
+        profile_photo_url: session.profile_photo_url,
     }))
 }
 

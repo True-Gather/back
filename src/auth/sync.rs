@@ -6,6 +6,7 @@
 // - le mapping entre sub Keycloak et user applicatif.
 
 use chrono::Utc;
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::{
@@ -76,6 +77,9 @@ pub async fn sync_user_from_keycloak(
                 existing_user.email_verified = true;
             }
 
+            let photo_url = sync_user_to_db(state, &keycloak_sub, existing_user).await?;
+            existing_user.profile_photo_url = photo_url;
+
             return Ok((existing_user.clone(), false));
         }
     }
@@ -90,6 +94,7 @@ pub async fn sync_user_from_keycloak(
         last_name,
         // Reprend le statut Keycloak — si Keycloak a déjà vérifié l'email, on l'accepte.
         email_verified: userinfo.email_verified.unwrap_or(false),
+        profile_photo_url: None,
         created_at: now,
         updated_at: now,
         last_login_at: Some(now),
@@ -102,8 +107,44 @@ pub async fn sync_user_from_keycloak(
 
     {
         let mut users_by_keycloak_sub = state.users_by_keycloak_sub.write().await;
-        users_by_keycloak_sub.insert(keycloak_sub, new_user.id);
+        users_by_keycloak_sub.insert(keycloak_sub.clone(), new_user.id);
     }
 
-    Ok((new_user, true))
+    let mut final_user = new_user;
+    let photo_url = sync_user_to_db(state, &keycloak_sub, &final_user).await?;
+    final_user.profile_photo_url = photo_url;
+
+    Ok((final_user, true))
+}
+
+// Effectue un UPSERT PostgreSQL pour le user et retourne son profile_photo_url.
+async fn sync_user_to_db(
+    state: &AppState,
+    keycloak_sub: &str,
+    user: &User,
+) -> AppResult<Option<String>> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO users (keycloak_id, first_name, last_name, display_name, email, last_login_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
+        ON CONFLICT (keycloak_id) DO UPDATE SET
+            first_name    = EXCLUDED.first_name,
+            last_name     = EXCLUDED.last_name,
+            display_name  = EXCLUDED.display_name,
+            email         = EXCLUDED.email,
+            last_login_at = NOW(),
+            updated_at    = NOW()
+        RETURNING profile_photo_url
+        "#,
+    )
+    .bind(keycloak_sub)
+    .bind(user.first_name.as_deref().unwrap_or(""))
+    .bind(user.last_name.as_deref().unwrap_or(""))
+    .bind(&user.display_name)
+    .bind(&user.email)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("DB sync error: {}", e)))?;
+
+    Ok(row.try_get::<Option<String>, _>("profile_photo_url").unwrap_or(None))
 }

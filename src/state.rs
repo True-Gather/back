@@ -3,17 +3,22 @@
 // Cet état est clonable et injecté dans les handlers Axum.
 // Il contient tout ce qui doit être mutualisé entre les requêtes.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::Duration,
+};
 
+use chrono::{DateTime, Utc};
 use deadpool_redis::Pool as RedisPool;
-use tokio::sync::{RwLock, mpsc};
+use sqlx::PgPool;
+use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
-// Import de la configuration.
 use crate::config::AppConfig;
+use crate::mail::MailService;
 use crate::models::User;
 use crate::webrtc_engine::sfu::{self, SfuState};
-use chrono::{DateTime, Utc};
 
 // ─── Mode d'une room ──────────────────────────────────────────────────────────
 
@@ -45,6 +50,8 @@ pub struct PendingAuthRequest {
 
     // Indique si le flow avait été lancé pour une inscription.
     pub is_registration: bool,
+
+    // Date de création de la demande pour limiter sa durée de vie.
     pub created_at: DateTime<Utc>,
 }
 
@@ -57,8 +64,8 @@ pub struct AppSession {
     // Identifiant interne local de l'utilisateur.
     pub user_id: Uuid,
 
-    // Identifiant stable renvoyé par Keycloak.
-    pub keycloak_sub: String,
+    // Identifiant stable renvoyé par Keycloak (sub OIDC = keycloak_id en base).
+    pub keycloak_id: String,
 
     // Email utilisateur.
     pub email: String,
@@ -74,6 +81,9 @@ pub struct AppSession {
 
     // ID token conservé pour pouvoir faire un logout OIDC propre côté Keycloak.
     pub id_token: Option<String>,
+
+    // URL de la photo de profil (base64 data URL ou chemin).
+    pub profile_photo_url: Option<String>,
 }
 
 // État partagé principal.
@@ -84,6 +94,9 @@ pub struct AppState {
 
     // Client HTTP partagé pour les appels externes.
     pub http_client: reqwest::Client,
+
+    // Pool de connexions PostgreSQL.
+    pub db: PgPool,
 
     // Store mémoire temporaire des flows OIDC en attente.
     //
@@ -107,8 +120,11 @@ pub struct AppState {
     // Valeur : user_id
     pub users_by_keycloak_sub: Arc<RwLock<HashMap<String, Uuid>>>,
 
-    // Pool de connexions Redis.
+    // Pool de connexions Redis (utilisé pour WebRTC et autres features).
     pub redis: RedisPool,
+
+    // Service d'envoi d'emails.
+    pub mail: Arc<MailService>,
 
     // Rooms de signalisation WebRTC actives.
     //
@@ -130,22 +146,32 @@ pub struct AppState {
 // Implémentation du state.
 impl AppState {
     // Construit un nouvel état partagé.
-    pub fn new(config: AppConfig, redis: RedisPool) -> Result<Self, reqwest::Error> {
-        // Construction du client HTTP.
+    pub async fn new(
+        config: AppConfig,
+        redis: RedisPool,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let http_client = reqwest::Client::builder()
             .user_agent("truegather-backend/0.1.0")
             .timeout(Duration::from_secs(15))
             .build()?;
 
-        // Retour de l'état prêt à être injecté.
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(10)
+            .connect(&config.database.url)
+            .await?;
+
+        let mail = Arc::new(MailService::new(&config.smtp));
+
         Ok(Self {
             config,
             http_client,
+            db,
             pending_auth: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             users: Arc::new(RwLock::new(HashMap::new())),
             users_by_keycloak_sub: Arc::new(RwLock::new(HashMap::new())),
             redis,
+            mail,
             signaling_rooms: Arc::new(RwLock::new(HashMap::new())),
             room_modes: Arc::new(RwLock::new(HashMap::new())),
             sfu_state: sfu::new_sfu_state(),
