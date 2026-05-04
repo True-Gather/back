@@ -16,7 +16,7 @@ use axum::{
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use chrono::{Duration, Utc};
 use validator::Validate;
@@ -187,28 +187,32 @@ pub async fn me(
         }));
     };
 
-    let maybe_response = {
+    let session = {
         let sessions = state.sessions.read().await;
-        sessions.get(&session_id).map(|session| SessionSnapshotResponse {
-            authenticated: true,
-            user: Some(UserProfileView {
-                id: session.user_id,
-                email: session.email.clone(),
-                display_name: session.display_name.clone(),
-                first_name: session.first_name.clone(),
-                last_name: session.last_name.clone(),
-            }),
-        })
+        sessions.get(&session_id).cloned()
     };
 
-    let Some(response) = maybe_response else {
+    let Some(session) = session else {
         return Ok(Json(SessionSnapshotResponse {
             authenticated: false,
             user: None,
         }));
     };
 
-    Ok(Json(response))
+    // Construction de la vue user pour le frontend.
+    let user = UserProfileView {
+        id: session.user_id,
+        email: session.email,
+        display_name: session.display_name,
+        first_name: session.first_name,
+        last_name: session.last_name,
+        profile_photo_url: session.profile_photo_url,
+    };
+
+    Ok(Json(SessionSnapshotResponse {
+        authenticated: true,
+        user: Some(user),
+    }))
 }
 
 // Déconnexion applicative + logout OIDC.
@@ -292,6 +296,62 @@ pub async fn reset_password(
 
     Ok(Json(MessageResponse {
         message: "Password reset payload accepted by backend skeleton".to_string(),
+    }))
+}
+
+
+// Payload pour la mise à jour de l'avatar.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UpdateAvatarRequest {
+    // Base64 data URL (ex. "data:image/png;base64,...") ou null pour supprimer.
+    pub avatar_url: Option<String>,
+}
+
+// Met à jour la photo de profil de l'utilisateur connecté.
+//
+// Persiste la valeur en base PostgreSQL et met à jour la session mémoire.
+pub async fn update_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateAvatarRequest>,
+) -> AppResult<Json<MessageResponse>> {
+    // Extraction de la session.
+    let session_id = crate::auth::session::extract_session_id_from_headers(
+        &headers,
+        &state.config.auth.cookie_name,
+    )
+    .ok_or_else(|| AppError::Unauthorized)?;
+
+    let session = {
+        let sessions = state.sessions.read().await;
+        sessions.get(&session_id).cloned()
+    }
+    .ok_or_else(|| AppError::Unauthorized)?;
+
+    // Mise à jour en base.
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET profile_photo_url = $1, updated_at = NOW()
+        WHERE keycloak_id = $2
+        "#,
+    )
+    .bind(&payload.avatar_url)
+    .bind(&session.keycloak_sub)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("DB avatar update error: {}", e)))?;
+
+    // Mise à jour de la session mémoire.
+    {
+        let mut sessions = state.sessions.write().await;
+        if let Some(s) = sessions.get_mut(&session_id) {
+            s.profile_photo_url = payload.avatar_url;
+        }
+    }
+
+    Ok(Json(MessageResponse {
+        message: "Avatar updated".to_string(),
     }))
 }
 
@@ -384,7 +444,7 @@ pub async fn change_password(
         .ok_or_else(|| AppError::Internal("Missing access_token in admin response".to_string()))?
         .to_string();
 
-    // Étape 3 : mettre à jour le mot de passe via l'API admin Keycloak.
+    // Mise à jour du mot de passe via l'API admin Keycloak.
     let reset_url = format!(
         "{}/admin/realms/truegather/users/{}/reset-password",
         realm_base, session.keycloak_sub
@@ -416,7 +476,7 @@ pub async fn change_password(
         )));
     }
 
-    // Étape 4 : envoi d'un email de confirmation (non bloquant).
+    // Envoi d'un email de confirmation (non bloquant).
     // Si l'envoi échoue, le changement de mot de passe reste valide.
     let display_name = session
         .first_name
@@ -603,5 +663,6 @@ pub async fn update_profile(
         display_name: new_display_name,
         first_name: new_first,
         last_name: new_last,
+        profile_photo_url: session.profile_photo_url,
     }))
 }

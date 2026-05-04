@@ -37,6 +37,7 @@ pub async fn create_session(state: &AppState, user: &User, id_token: Option<Stri
         first_name: user.first_name.clone(),
         last_name: user.last_name.clone(),
         id_token,
+        profile_photo_url: user.profile_photo_url.clone(),
     };
 
     // Stockage mémoire de la session.

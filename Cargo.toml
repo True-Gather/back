@@ -54,8 +54,8 @@ hmac = "0.12"
 # Client Redis asynchrone avec pool de connexions.
 deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
 
-# ORM / client PostgreSQL asynchrone.
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "migrate"] }
+# ORM / requêtes SQL asynchrones vers PostgreSQL.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }
 
 # Utilitaires pour les streams/sinks asynchrones (WebSocket).
 futures-util = "0.3"
