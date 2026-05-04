@@ -5,6 +5,9 @@
 //   - des credentials TURN temporels (RFC 5766 / coturn --use-auth-secret),
 //   - une factory de RTCPeerConnection prête à l'emploi,
 //   - des helpers de validation SDP et ICE candidate.
+
+/// SFU (Selective Forwarding Unit) pour les rooms de groupe (3+ participants).
+pub mod sfu;
 //
 // ─── Sécurité TURN ───────────────────────────────────────────────────────────
 //
