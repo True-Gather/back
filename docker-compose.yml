@@ -10,12 +10,23 @@ services:
       - "8080:8080"
     environment:
       - RUST_LOG=info,truegather_backend=debug
-      # Les variables d'environnement suivantes dépendent de votre configuration config.rs
       - KEYCLOAK_URL=http://keycloak:8081
       - REDIS_URL=redis://redis:6379
+      - APP__KEYCLOAK__ISSUER_URL_INTERNAL=http://host.docker.internal:8081/realms/truegather
+      - APP__KEYCLOAK__ISSUER_URL=http://localhost:8081/realms/truegather
+      - APP__DATABASE__URL=postgres://tg_user:tg_password@truegather_db:5432/truegather
+      - APP__SMTP__HOST=smtp.gmail.com
+      - APP__SMTP__PORT=465
+      - APP__SMTP__USERNAME=adamchopper83@gmail.com
+      - APP__SMTP__PASSWORD=fmqqagriqrchdutn
+      - APP__SMTP__FROM=TrueGather <adamchopper83@gmail.com>
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - keycloak
       - redis
+      - truegather_db
     networks:
       - truegather-network
 
@@ -30,7 +41,7 @@ services:
       - truegather-network
 
   keycloak:
-    image: quay.io/keycloak/keycloak:26.0
+    image: quay.io/keycloak/keycloak:26.5.5
     container_name: truegather_keycloak
     command: start-dev
     environment:
@@ -61,6 +72,20 @@ services:
     networks:
       - truegather-network
 
+  truegather_db:
+    image: postgres:15-alpine
+    container_name: truegather_db
+    environment:
+      - POSTGRES_DB=truegather
+      - POSTGRES_USER=tg_user
+      - POSTGRES_PASSWORD=tg_password
+    ports:
+      - "5435:5432"
+    volumes:
+      - truegather_db_data:/var/lib/postgresql/data
+    networks:
+      - truegather-network
+
 networks:
   truegather-network:
     driver: bridge
@@ -68,3 +93,4 @@ networks:
 volumes:
   postgres_data:
   redis_data:
+  truegather_db_data:

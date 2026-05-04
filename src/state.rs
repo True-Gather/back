@@ -3,17 +3,20 @@
 // Cet état est clonable et injecté dans les handlers Axum.
 // Il contient tout ce qui doit être mutualisé entre les requêtes.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::Duration,
+};
 
+use chrono::{DateTime, Utc};
 use deadpool_redis::Pool as RedisPool;
 use sqlx::PgPool;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 
-// Import de la configuration.
 use crate::config::AppConfig;
-use crate::models::User;
-use chrono::{DateTime, Utc};
+use crate::mail::MailService;
 
 // Représente une demande d'authentification en attente.
 //
@@ -29,6 +32,8 @@ pub struct PendingAuthRequest {
 
     // Indique si le flow avait été lancé pour une inscription.
     pub is_registration: bool,
+
+    // Date de création de la demande pour limiter sa durée de vie.
     pub created_at: DateTime<Utc>,
 }
 
@@ -38,11 +43,8 @@ pub struct PendingAuthRequest {
 // Plus tard, elle pourra être migrée vers Redis ou une base.
 #[derive(Debug, Clone)]
 pub struct AppSession {
-    // Identifiant interne local de l'utilisateur.
-    pub user_id: Uuid,
-
     // Identifiant stable renvoyé par Keycloak.
-    pub keycloak_sub: String,
+    pub keycloak_id: String,
 
     // Email utilisateur.
     pub email: String,
@@ -85,20 +87,11 @@ pub struct AppState {
     // Clé : session_id.
     pub sessions: Arc<RwLock<HashMap<String, AppSession>>>,
 
-    // Store mémoire des utilisateurs applicatifs locaux.
-    //
-    // Clé : user_id.
-    pub users: Arc<RwLock<HashMap<Uuid, User>>>,
-
-    // Index mémoire pour retrouver rapidement un utilisateur
-    // applicatif local depuis le sub Keycloak.
-    //
-    // Clé : keycloak_sub
-    // Valeur : user_id
-    pub users_by_keycloak_sub: Arc<RwLock<HashMap<String, Uuid>>>,
-
-    // Pool de connexions Redis.
+    // Pool de connexions Redis (utilisé pour WebRTC et autres features).
     pub redis: RedisPool,
+
+    // Service d'envoi d'emails.
+    pub mail: Arc<MailService>,
 
     // Rooms de signalisation WebRTC actives.
     //
@@ -111,23 +104,30 @@ pub struct AppState {
 // Implémentation du state.
 impl AppState {
     // Construit un nouvel état partagé.
-    pub fn new(config: AppConfig, db: PgPool, redis: RedisPool) -> Result<Self, reqwest::Error> {
-        // Construction du client HTTP.
+    pub async fn new(
+        config: AppConfig,
+        redis: RedisPool,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let http_client = reqwest::Client::builder()
             .user_agent("truegather-backend/0.1.0")
             .timeout(Duration::from_secs(15))
             .build()?;
 
-        // Retour de l'état prêt à être injecté.
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(10)
+            .connect(&config.database.url)
+            .await?;
+
+        let mail = Arc::new(MailService::new(&config.smtp));
+
         Ok(Self {
             config,
             http_client,
             db,
             pending_auth: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            users: Arc::new(RwLock::new(HashMap::new())),
-            users_by_keycloak_sub: Arc::new(RwLock::new(HashMap::new())),
             redis,
+            mail,
             signaling_rooms: Arc::new(RwLock::new(HashMap::new())),
         })
     }
