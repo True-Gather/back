@@ -6,6 +6,7 @@ pub mod config;
 pub mod error;
 pub mod mail;
 pub mod media;
+pub mod meetings;
 pub mod models;
 pub mod redis;
 pub mod state;
@@ -31,7 +32,9 @@ pub fn build_app(state: AppState) -> Router {
         // Routes "générales" de l'API.
         .merge(api::routes::router(state.clone()))
         // Routes d'authentification.
-        .nest("/auth", auth::routes::router());
+        .nest("/auth", auth::routes::router())
+        // Routes meetings.
+        .merge(meetings::routes::router());
 
     // Construction du router final.
     Router::new()

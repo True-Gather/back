@@ -1,3 +1,11 @@
+// Module mail — envoi d'emails transactionnels.
+//
+// Structure :
+//   service.rs   → fonction générique send_email via Brevo + fonctions métier
+//   templates.rs → templates HTML des emails
+//
+// MailService fournit l'envoi SMTP (invitations réunions via lettre).
+
 use lettre::{
     message::{header::ContentType, Mailbox, MultiPart, SinglePart},
     transport::smtp::authentication::Credentials,
@@ -6,6 +14,16 @@ use lettre::{
 use tracing::{info, warn};
 
 use crate::config::SmtpConfig;
+
+pub mod service;
+pub mod templates;
+
+// Ré-export des fonctions publiques pour un accès simplifié depuis l'extérieur.
+// Usage : mail::send_password_changed_email(to, username).await
+pub use service::send_email;
+pub use service::send_password_changed_email;
+pub use service::send_profile_changed_email;
+pub use service::send_verification_email;
 
 pub struct MailService {
     transport: Option<AsyncSmtpTransport<Tokio1Executor>>,

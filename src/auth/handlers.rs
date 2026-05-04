@@ -24,7 +24,7 @@ use validator::Validate;
 use crate::{
     auth::dto::{
         AuthCallbackQuery, ChangePasswordRequest, ForgotPasswordRequest, MessageResponse,
-        ResetPasswordRequest, SessionSnapshotResponse, UpdateProfileRequest,
+        ResetPasswordRequest, SessionSnapshotResponse, UpdateProfileRequest, VerifyEmailQuery,
     },
     error::{AppError, AppResult},
     models::UserProfileView,
@@ -147,9 +147,57 @@ pub async fn auth_callback(
     let userinfo = crate::auth::oidc::fetch_userinfo(&state, &token_response.access_token).await?;
 
     // Sync user local
-    let local_user = crate::auth::sync::sync_user_from_keycloak(&state, &userinfo).await?;
+    let (local_user, is_new) = crate::auth::sync::sync_user_from_keycloak(&state, &userinfo).await?;
 
-    // Création session
+    // Si c'est une première inscription, on envoie un email de vérification.
+    // On ne se fie pas à email_verified de Keycloak (en dev il est souvent true par défaut).
+    //
+    // Important : au redémarrage du backend, le store utilisateur en mémoire est vide.
+    // Un login d'un utilisateur Keycloak existant peut donc ressortir `is_new=true`.
+    // On ne déclenche la vérification email que pour le parcours inscription.
+    if pending_request.is_registration && is_new {
+        let token = crate::auth::email_verification::generate_token();
+        let token_hash = crate::auth::email_verification::hash_token(&token);
+
+        // Stockage du hash dans Redis (TTL 15 min).
+        if let Err(e) = crate::auth::email_verification::store_verification_token(
+            &state.redis,
+            &token_hash,
+            local_user.id,
+        )
+        .await
+        {
+            tracing::warn!("Impossible de stocker le token de vérification : {e}");
+        } else {
+            let verify_url = format!(
+                "{}/api/v1/auth/verify-email?token={}",
+                state.config.backend.base_url, token
+            );
+            let display_name = local_user.first_name.as_deref().unwrap_or(&local_user.display_name);
+
+            if let Err(e) = crate::mail::send_verification_email(
+                &local_user.email,
+                display_name,
+                &verify_url,
+            )
+            .await
+            {
+                tracing::warn!(
+                    email = local_user.email.as_str(),
+                    "Échec envoi email de vérification : {e}"
+                );
+            }
+        }
+
+        // Pas de session créée : l'utilisateur doit vérifier son email avant d'accéder au dashboard.
+        let pending_url = format!(
+            "{}/auth/verify-email?pending=1",
+            state.config.frontend.base_url.trim_end_matches('/')
+        );
+        return Ok(Redirect::to(&pending_url).into_response());
+    }
+
+    // Création session (uniquement pour les utilisateurs déjà existants)
     let session_id = crate::auth::session::create_session(&state, &local_user, Some(id_token.clone())).await?;
 
     let cookie_value = crate::auth::session::build_session_cookie(
@@ -248,14 +296,11 @@ pub async fn logout(
         state.config.auth.cookie_secure,
     );
 
-    let redirect_target = if let Some(id_token) = maybe_id_token.as_deref() {
-        crate::auth::oidc::build_logout_redirect_url(&state, id_token)
-    } else {
-        state.config.frontend_post_logout_url()
-    };
+    let redirect_target =
+        crate::auth::oidc::build_logout_redirect_url(&state, maybe_id_token.as_deref());
 
     tracing::info!(
-        "LOGOUT redirect prepared (oidc_logout={})",
+        "LOGOUT redirect prepared (has_id_token_hint={})",
         maybe_id_token.is_some()
     );
     let mut response = Redirect::to(&redirect_target).into_response();
@@ -337,7 +382,7 @@ pub async fn update_avatar(
         "#,
     )
     .bind(&payload.avatar_url)
-    .bind(&session.keycloak_sub)
+    .bind(&session.keycloak_id)
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("DB avatar update error: {}", e)))?;
@@ -392,12 +437,7 @@ pub async fn change_password(
     .ok_or(AppError::Unauthorized)?;
 
     // Construction de l'URL du realm Keycloak.
-    let issuer = state
-        .config
-        .keycloak
-        .issuer_url_internal
-        .as_deref()
-        .unwrap_or(&state.config.keycloak.issuer_url);
+    let issuer = &state.config.keycloak.issuer_url_internal;
 
     let realm_base = issuer
         .trim_end_matches('/')
@@ -447,7 +487,7 @@ pub async fn change_password(
     // Mise à jour du mot de passe via l'API admin Keycloak.
     let reset_url = format!(
         "{}/admin/realms/truegather/users/{}/reset-password",
-        realm_base, session.keycloak_sub
+        realm_base, session.keycloak_id
     );
 
     let reset_body = serde_json::json!({
@@ -531,12 +571,7 @@ pub async fn update_profile(
     .ok_or(AppError::Unauthorized)?;
 
     // Construction de l'URL de base Keycloak.
-    let issuer = state
-        .config
-        .keycloak
-        .issuer_url_internal
-        .as_deref()
-        .unwrap_or(&state.config.keycloak.issuer_url);
+    let issuer = &state.config.keycloak.issuer_url_internal;
 
     let realm_base = issuer
         .trim_end_matches('/')
@@ -586,7 +621,7 @@ pub async fn update_profile(
     // Mise à jour via l'API admin Keycloak.
     let update_url = format!(
         "{}/admin/realms/truegather/users/{}",
-        realm_base, session.keycloak_sub
+        realm_base, session.keycloak_id
     );
 
     let mut update_body = serde_json::Map::new();
@@ -665,4 +700,64 @@ pub async fn update_profile(
         last_name: new_last,
         profile_photo_url: session.profile_photo_url,
     }))
+}
+
+// Vérification d'email via le token reçu par email.
+//
+// Flux :
+//   1. Lit le token depuis la query string.
+//   2. Hashe le token et cherche dans Redis.
+//   3. Si valide : marque email_verified=true.
+//   4. Redirige vers la page frontend de confirmation.
+//
+// Important : on ne crée pas de session ici. La session applicative doit être
+// créée par le callback OIDC après une vraie connexion Keycloak, afin de
+// conserver l'id_token nécessaire au logout OIDC.
+pub async fn verify_email(
+    State(state): State<AppState>,
+    Query(query): Query<VerifyEmailQuery>,
+) -> AppResult<Response> {
+    let token = query
+        .token
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| AppError::BadRequest("Token de vérification manquant".to_string()))?;
+
+    let maybe_user_id =
+        crate::auth::email_verification::verify_and_consume_token(&state.redis, &token).await?;
+
+    let Some(user_id) = maybe_user_id else {
+        // Token invalide ou expiré — redirection vers le frontend avec erreur.
+        let redirect_url = format!(
+            "{}/auth/verify-email?error=invalid_token",
+            state.config.frontend.base_url.trim_end_matches('/')
+        );
+        return Ok(Redirect::to(&redirect_url).into_response());
+    };
+
+    // Marquer l'email comme vérifié.
+    let user_exists = {
+        let mut users = state.users.write().await;
+        if let Some(user) = users.get_mut(&user_id) {
+            user.email_verified = true;
+            true
+        } else {
+            false
+        }
+    };
+
+    if !user_exists {
+        return Ok(Redirect::to(&format!(
+            "{}/auth/verify-email?error=user_not_found",
+            state.config.frontend.base_url.trim_end_matches('/')
+        )).into_response());
+    }
+
+    tracing::info!(user_id = %user_id, "Email vérifié avec succès");
+
+    let redirect_url = format!(
+        "{}/auth/verify-email?verified=1",
+        state.config.frontend.base_url.trim_end_matches('/')
+    );
+
+    Ok(Redirect::to(&redirect_url).into_response())
 }

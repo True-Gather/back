@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::config::AppConfig;
 use crate::mail::MailService;
+use crate::models::User;
 
 // Représente une demande d'authentification en attente.
 //
@@ -43,7 +44,10 @@ pub struct PendingAuthRequest {
 // Plus tard, elle pourra être migrée vers Redis ou une base.
 #[derive(Debug, Clone)]
 pub struct AppSession {
-    // Identifiant stable renvoyé par Keycloak.
+    // Identifiant interne local de l'utilisateur.
+    pub user_id: Uuid,
+
+    // Identifiant stable renvoyé par Keycloak (sub OIDC = keycloak_id en base).
     pub keycloak_id: String,
 
     // Email utilisateur.
@@ -87,6 +91,18 @@ pub struct AppState {
     // Clé : session_id.
     pub sessions: Arc<RwLock<HashMap<String, AppSession>>>,
 
+    // Store mémoire des utilisateurs applicatifs locaux.
+    //
+    // Clé : user_id.
+    pub users: Arc<RwLock<HashMap<Uuid, User>>>,
+
+    // Index mémoire pour retrouver rapidement un utilisateur
+    // applicatif local depuis le sub Keycloak.
+    //
+    // Clé : keycloak_sub
+    // Valeur : user_id
+    pub users_by_keycloak_sub: Arc<RwLock<HashMap<String, Uuid>>>,
+
     // Pool de connexions Redis (utilisé pour WebRTC et autres features).
     pub redis: RedisPool,
 
@@ -126,6 +142,8 @@ impl AppState {
             db,
             pending_auth: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            users: Arc::new(RwLock::new(HashMap::new())),
+            users_by_keycloak_sub: Arc::new(RwLock::new(HashMap::new())),
             redis,
             mail,
             signaling_rooms: Arc::new(RwLock::new(HashMap::new())),

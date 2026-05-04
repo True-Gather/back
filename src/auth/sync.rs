@@ -34,10 +34,12 @@ fn build_display_name(userinfo: &UserInfoClaims) -> String {
 }
 
 // Crée ou met à jour un utilisateur local à partir du profil Keycloak.
+//
+// Retourne `(User, bool)` où le bool indique si l'utilisateur vient d'être créé.
 pub async fn sync_user_from_keycloak(
     state: &AppState,
     userinfo: &UserInfoClaims,
-) -> AppResult<User> {
+) -> AppResult<(User, bool)> {
     let keycloak_sub = userinfo.sub.trim().to_string();
 
     if keycloak_sub.is_empty() {
@@ -70,11 +72,15 @@ pub async fn sync_user_from_keycloak(
             existing_user.last_name = last_name;
             existing_user.updated_at = now;
             existing_user.last_login_at = Some(now);
+            // Si Keycloak confirme la vérification, on l'entérine (jamais de retour en arrière).
+            if userinfo.email_verified.unwrap_or(false) {
+                existing_user.email_verified = true;
+            }
 
-            let photo_url = sync_user_to_db(state, &keycloak_sub, &existing_user).await?;
+            let photo_url = sync_user_to_db(state, &keycloak_sub, existing_user).await?;
             existing_user.profile_photo_url = photo_url;
 
-            return Ok(existing_user.clone());
+            return Ok((existing_user.clone(), false));
         }
     }
 
@@ -86,6 +92,8 @@ pub async fn sync_user_from_keycloak(
         display_name,
         first_name,
         last_name,
+        // Reprend le statut Keycloak — si Keycloak a déjà vérifié l'email, on l'accepte.
+        email_verified: userinfo.email_verified.unwrap_or(false),
         profile_photo_url: None,
         created_at: now,
         updated_at: now,
@@ -106,7 +114,7 @@ pub async fn sync_user_from_keycloak(
     let photo_url = sync_user_to_db(state, &keycloak_sub, &final_user).await?;
     final_user.profile_photo_url = photo_url;
 
-    Ok(final_user)
+    Ok((final_user, true))
 }
 
 // Effectue un UPSERT PostgreSQL pour le user et retourne son profile_photo_url.

@@ -22,7 +22,7 @@ config = "0.15"
 dotenvy = "0.15"
 
 # Client HTTP pour parler plus tard à Keycloak.
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "form"] }
 
 # Validation des payloads.
 validator = { version = "0.20", features = ["derive"] }
@@ -51,7 +51,10 @@ sha2 = "0.10"
 base64 = "0.22"
 hmac = "0.12"
 
-# Envoi d'emails
+# Génération de nombres aléatoires sécurisés (tokens de vérification).
+rand = "0.8"
+
+# Envoi d'emails via SMTP (invitations réunions).
 lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls", "ring", "rustls-native-certs", "smtp-transport", "builder"] }
 
 # PostgreSQL + migrations
@@ -59,9 +62,6 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid"
 
 # Client Redis asynchrone avec pool de connexions.
 deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
-
-# ORM / requêtes SQL asynchrones vers PostgreSQL.
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }
 
 # Utilitaires pour les streams/sinks asynchrones (WebSocket).
 futures-util = "0.3"

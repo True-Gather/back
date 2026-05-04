@@ -11,11 +11,21 @@ use validator::ValidationErrors;
 
 pub type AppResult<T> = Result<T, AppError>;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ErrorBody {
     pub status: u16,
     pub error: String,
     pub message: String,
+}
+
+// Élément de conflit de participant (pour ConflictParticipants).
+#[derive(Debug, Serialize, Clone)]
+pub struct ParticipantConflictItem {
+    pub email: String,
+    pub display_name: Option<String>,
+    pub conflicting_meeting_title: String,
+    pub conflicting_start: String,
+    pub conflicting_end: String,
 }
 
 // Erreur applicative principale.
@@ -37,9 +47,21 @@ pub enum AppError {
     #[error("Unauthorized")]
     Unauthorized,
 
+    // Erreur d'accès interdit.
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
     // Ressource absente.
     #[error("Not found: {0}")]
     NotFound(String),
+
+    // Conflit de ressource.
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
+    // Conflit de participants (409 avec détails).
+    #[error("Participant conflicts")]
+    ConflictParticipants(Vec<ParticipantConflictItem>),
 
     // Fonctionnalité pas encore branchée.
     #[error("Not implemented: {0}")]
@@ -63,11 +85,32 @@ impl IntoResponse for AppError {
             AppError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
             AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
             AppError::Unauthorized => StatusCode::UNAUTHORIZED,
+            AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::Conflict(_) => StatusCode::CONFLICT,
+            AppError::ConflictParticipants(_) => StatusCode::CONFLICT,
             AppError::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
             AppError::Upstream(_) => StatusCode::BAD_GATEWAY,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
+
+        // Pour ConflictParticipants, on retourne les détails structurés.
+        if let AppError::ConflictParticipants(items) = self {
+            #[derive(Serialize)]
+            struct ConflictResponse {
+                status: u16,
+                error: &'static str,
+                conflicts: Vec<ParticipantConflictItem>,
+            }
+            return (
+                StatusCode::CONFLICT,
+                Json(ConflictResponse {
+                    status: 409,
+                    error: "Participant Conflict",
+                    conflicts: items,
+                }),
+            ).into_response();
+        }
 
         // Construction du body JSON.
         let body = ErrorBody {

@@ -37,8 +37,12 @@ pub struct FrontendConfig {
 // Configuration liée à Keycloak.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KeycloakConfig {
+    // URL interne Docker (server-to-server) — utilisée par le backend pour les appels OIDC.
+    // Valeur par défaut : http://localhost:8081/realms/truegather (Docker Compose internal).
     pub issuer_url_internal: String,
+    // URL publique du realm (exposée au navigateur pour les redirections OIDC).
     pub issuer_url_public: String,
+    // URL de l'issuer configurée dans les tokens Keycloak — utilisée pour la validation des claims.
     pub issuer_url: String,
     pub client_id: String,
     pub client_secret: Option<String>,
