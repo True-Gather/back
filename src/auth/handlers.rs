@@ -133,6 +133,11 @@ pub async fn auth_callback(
     let claims: IdTokenClaims = serde_json::from_slice(&decoded)
         .map_err(|_| AppError::Internal("Invalid id_token payload".to_string()))?;
 
+    // Vérification du nonce OIDC.
+    //
+    // Sécurité :
+    // cela empêche qu'un token provenant d'un autre flow
+    // soit réutilisé ici.
     if claims.nonce.as_deref() != Some(&pending_request.nonce) {
         return Err(AppError::BadRequest("Invalid nonce".to_string()));
     }
@@ -303,6 +308,7 @@ pub async fn logout(
         "LOGOUT redirect prepared (has_id_token_hint={})",
         maybe_id_token.is_some()
     );
+
     let mut response = Redirect::to(&redirect_target).into_response();
 
     response.headers_mut().insert(
