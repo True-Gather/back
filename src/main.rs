@@ -18,11 +18,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let db = sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect(&config.database.url)
-        .await?;
-
-    // Exécution des migrations.
-    sqlx::migrate!("./migrations").run(&db).await?;
-
+    // N'exige une connexion immédiate et les migrations au démarrage
+    // que si l'URL de base de données a été explicitement fournie.
+    let db = if std::env::var_os("APP_DATABASE__URL").is_some() {
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&config.database.url)
+            .await?;
+        sqlx::migrate!("./migrations").run(&db).await?;
+        db
+    } else {
+        tracing::warn!(
+            "APP_DATABASE__URL is not set; skipping startup PostgreSQL connectivity check and migrations"
+        );
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_lazy(&config.database.url)?
+    };
     // Création du pool Redis.
     let redis = create_pool(&config.redis.url)?;
 
