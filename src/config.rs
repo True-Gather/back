@@ -9,8 +9,10 @@ pub struct AppConfig {
     pub frontend: FrontendConfig,
     pub keycloak: KeycloakConfig,
     pub auth: AuthConfig,
+    pub database: DatabaseConfig,
     pub redis: RedisConfig,
     pub turn: TurnConfig,
+    pub smtp: SmtpConfig,
 }
 
 // Configuration du serveur HTTP.
@@ -35,6 +37,12 @@ pub struct FrontendConfig {
 // Configuration liée à Keycloak.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KeycloakConfig {
+    // URL interne Docker (server-to-server) — utilisée par le backend pour les appels OIDC.
+    // Valeur par défaut : http://localhost:8081/realms/truegather (Docker Compose internal).
+    pub issuer_url_internal: String,
+    // URL publique du realm (exposée au navigateur pour les redirections OIDC).
+    pub issuer_url_public: String,
+    // URL de l'issuer configurée dans les tokens Keycloak — utilisée pour la validation des claims.
     pub issuer_url: String,
     pub client_id: String,
     pub client_secret: Option<String>,
@@ -47,10 +55,32 @@ pub struct AuthConfig {
     pub cookie_secure: bool,
 }
 
+// Configuration PostgreSQL.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+}
+
 // Configuration Redis.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RedisConfig {
     pub url: String,
+}
+
+// Configuration SMTP pour l'envoi d'emails.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SmtpConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub from: Option<String>,
+}
+
+impl SmtpConfig {
+    pub fn is_configured(&self) -> bool {
+        self.host.is_some() && self.username.is_some() && self.password.is_some()
+    }
 }
 
 // Configuration TURN / ICE.
@@ -69,46 +99,32 @@ pub struct TurnConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self, config::ConfigError> {
-        let _ = dotenvy::dotenv();
+    let _ = dotenvy::dotenv();
 
-        // Construction d'une config avec valeurs par défaut.
-        let settings = config::Config::builder()
-            // Defaults serveur.
-            .set_default("server.host", "0.0.0.0")?
-            .set_default("server.port", 8080)?
-            // Default backend public local.
-            .set_default("backend.base_url", "http://localhost:8080")?
-            // Default frontend local Nuxt.
-            .set_default("frontend.base_url", "http://localhost:3000")?
-            // Defaults Keycloak.
-            .set_default(
-                "keycloak.issuer_url",
-                "http://localhost:8081/realms/truegather",
-            )?
-            .set_default("keycloak.client_id", "truegather-backend")?
-            // Defaults auth applicative.
-            .set_default("auth.cookie_name", "tg_session")?
-            .set_default("auth.cookie_secure", false)?
-            // Default Redis local.
-            .set_default("redis.url", "redis://127.0.0.1:6379")?
-            // Defaults TURN / ICE.
-            // Les URLs STUN sont configurées via APP_TURN__STUN_URLS (liste JSON).
-            // En l'absence de variable d'env, on utilise les serveurs STUN Google.
-            .set_default(
-                "turn.stun_urls",
-                vec![
-                    "stun:stun.l.google.com:19302",
-                    "stun:stun1.l.google.com:19302",
-                ],
-            )?
-            .set_default("turn.ttl_secs", 3600u64)?
-            // Surcharge par les variables d'environnement.
-            .add_source(config::Environment::with_prefix("APP").separator("__"))
-            // Construction finale.
-            .build()?;
+    let settings = config::Config::builder()
+        .set_default("server.host", "0.0.0.0")?
+        .set_default("server.port", 8080)?
+        .set_default("backend.base_url", "http://localhost:8080")?
+        .set_default("frontend.base_url", "http://localhost:3000")?
+        // Keycloak
+        .set_default("keycloak.issuer_url", "http://localhost:8081/realms/truegather")?
+        .set_default("keycloak.issuer_url_public", "http://localhost:8081/realms/truegather")?
+        .set_default("keycloak.issuer_url_internal", "http://localhost:8081/realms/truegather")?
+        .set_default("keycloak.client_id", "truegather-backend")?
+        .set_default("auth.cookie_name", "tg_session")?
+        .set_default("auth.cookie_secure", false)?
+        .set_default("database.url", "postgres://tg_user:tg_password@localhost:5434/truegather")?
+        .set_default("redis.url", "redis://127.0.0.1:6379")?
+        .set_default("turn.stun_urls", vec![
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302",
+        ])?
+        .set_default("turn.ttl_secs", 3600u64)?
+        .add_source(config::Environment::with_prefix("APP").separator("__"))
+        .build()?;
 
-        settings.try_deserialize::<Self>()
-    }
+    settings.try_deserialize::<Self>()
+}
 
     // Retourne l'adresse complète d'écoute du serveur.
     pub fn server_address(&self) -> String {

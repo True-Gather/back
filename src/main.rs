@@ -7,7 +7,7 @@ use truegather_backend::{build_app, config::AppConfig, redis::create_pool, state
 
 // Macro principale Tokio pour exécuter l'application en asynchrone.
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialisation du subscriber de logs.
     init_tracing();
 
@@ -17,7 +17,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Création du pool Redis.
     let redis = create_pool(&config.redis.url)?;
 
-    let state = AppState::new(config.clone(), redis)?;
+    // Création de l'état applicatif (connecte PostgreSQL et crée le MailService).
+    let state = AppState::new(config.clone(), redis).await?;
+
+    // Migrations au démarrage si l'URL de base de données a été fournie.
+    if std::env::var_os("APP_DATABASE__URL").is_some() {
+        sqlx::migrate!("./migrations").run(&state.db).await?;
+    }
+
     let app = build_app(state);
     let address = config.server_address();
     tracing::info!("Starting TrueGather backend on {}", address);

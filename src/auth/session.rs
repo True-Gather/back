@@ -23,7 +23,7 @@ pub async fn create_session(state: &AppState, user: &User, id_token: Option<Stri
     // Génération d'un identifiant de session opaque.
     let session_id = Uuid::new_v4().to_string();
 
-    let keycloak_sub = user
+    let keycloak_id = user
         .keycloak_sub
         .clone()
         .ok_or_else(|| AppError::Internal("Local user is missing keycloak_sub".to_string()))?;
@@ -31,12 +31,13 @@ pub async fn create_session(state: &AppState, user: &User, id_token: Option<Stri
     // Construction de la session applicative.
     let session = AppSession {
         user_id: user.id,
-        keycloak_sub,
+        keycloak_id,
         email: user.email.clone(),
         display_name: user.display_name.clone(),
         first_name: user.first_name.clone(),
         last_name: user.last_name.clone(),
         id_token,
+        profile_photo_url: user.profile_photo_url.clone(),
     };
 
     // Stockage mémoire de la session.

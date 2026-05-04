@@ -1,10 +1,14 @@
-// Déclaration des routes génériques de l'API.
-// La route /meetings est désormais dans meetings::routes.
+use axum::{
+    Router,
+    routing::get,
+};
 
-use axum::{routing::get, Router};
-use crate::api::handlers;
+use crate::{
+    api::handlers,
+    state::AppState,
+};
 
-pub fn router() -> Router<crate::state::AppState> {
+pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(handlers::health))
 }

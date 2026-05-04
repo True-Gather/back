@@ -2,6 +2,28 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// ── Requête meeting instantané ────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CreateInstantMeetingRequest {
+    pub title: String,
+    pub participant_emails: Vec<String>,
+    pub group_id: Option<Uuid>,
+    pub ai_enabled: bool,
+    pub microphone_enabled: bool,
+    pub camera_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InstantMeetingResponse {
+    pub meeting_id: Uuid,
+    pub title: String,
+    pub meeting_link: String,
+    pub room_code: String,
+    pub status: String,
+    pub participants_count: usize,
+}
+
 // ── Requête de création ───────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -15,6 +37,22 @@ pub struct CreateMeetingRequest {
     pub participant_emails: Vec<String>,
     /// UUIDs des groupes invités
     pub group_ids: Vec<Uuid>,
+}
+
+// ── Détail d'un meeting (accès contrôlé) ─────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct MeetingDetailResponse {
+    pub meeting_id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub meeting_type: String,
+    pub ai_enabled: bool,
+    pub room_code: Option<String>,
+    pub meeting_link: Option<String>,
+    pub host_keycloak_id: String,
+    pub participants: Vec<ParticipantResponse>,
+    pub user_role: String,
 }
 
 // ── Réponse meeting ───────────────────────────────────────────────────────────
