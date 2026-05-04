@@ -61,6 +61,7 @@ pub async fn create_meeting(
     )
     .bind(meeting_id)
     .bind(&session.keycloak_sub)
+    .bind(&payload.title)
     .bind(Option::<String>::None) // description
     .bind("instant")
     .bind("live")

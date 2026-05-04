@@ -57,7 +57,7 @@ pub enum AppError {
 // Conversion d'une erreur applicative vers une réponse HTTP JSON.
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        println!("APP ERROR => {:?}", self);
+        tracing::error!("APP ERROR => {:?}", self);
         let status = match &self {
             AppError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
             AppError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
