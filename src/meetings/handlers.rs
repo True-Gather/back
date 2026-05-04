@@ -310,7 +310,7 @@ pub async fn list_meetings(
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<MeetingResponse>>> {
     let user_id = require_session(&state, &headers).await?;
-    let pool = &state.db;
+    let pool = &state.pool;
 
     let rows = sqlx::query!(
         r#"
