@@ -1,8 +1,8 @@
 // Déclaration des routes auth.
 
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post, put},
 };
 
 use crate::auth::handlers;
@@ -16,4 +16,8 @@ pub fn router() -> Router<crate::state::AppState> {
         .route("/me", get(handlers::me))
         .route("/forgot-password", post(handlers::forgot_password))
         .route("/reset-password", post(handlers::reset_password))
+        // Changement de mot de passe pour un utilisateur connecté.
+        .route("/password", put(handlers::change_password))
+        // Mise à jour du profil (prénom, nom de famille).
+        .route("/me", put(handlers::update_profile))
 }

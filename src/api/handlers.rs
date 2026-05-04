@@ -1,3 +1,5 @@
+// Handlers API génériques.
+
 use axum::{
     extract::{Extension, State},
     Json,
@@ -58,7 +60,7 @@ pub async fn create_meeting(
         "#,
     )
     .bind(meeting_id)
-    .bind(&session.keycloak_id)
+    .bind(&session.keycloak_sub)
     .bind(&payload.title)
     .bind(Option::<String>::None) // description
     .bind("instant")
@@ -94,7 +96,7 @@ pub async fn create_meeting(
     )
     .bind(participant_id)
     .bind(meeting_id)
-    .bind(&session.keycloak_id)
+    .bind(&session.keycloak_sub)
     .bind("host")
     .bind("joined")
     .bind(now)
@@ -104,10 +106,10 @@ pub async fn create_meeting(
     .await?;
 
     Ok(Json(CreateMeetingResponse {
-    meeting_id: meeting_id.to_string(),
-    title: payload.title,
-    host_keycloak_id: session.keycloak_id,
-    participants_count: payload.participant_emails.len(),
-    status: "live".to_string(),
-}))
+        meeting_id: meeting_id.to_string(),
+        title: payload.title,
+        host_keycloak_id: session.keycloak_sub,
+        participants_count: payload.participant_emails.len(),
+        status: "live".to_string(),
+    }))
 }

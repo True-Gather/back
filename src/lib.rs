@@ -9,12 +9,13 @@ pub mod media;
 pub mod models;
 pub mod redis;
 pub mod state;
+pub mod webrtc_engine;
 pub mod ws;
 
 // Imports nécessaires pour construire le router global.
 use axum::{
-    http::{header, HeaderValue, Method},
     Router,
+    http::{HeaderValue, Method, header},
 };
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -35,6 +36,8 @@ pub fn build_app(state: AppState) -> Router {
     // Construction du router final.
     Router::new()
         .nest("/api/v1", api_v1)
+        // Route WebSocket de signalisation WebRTC.
+        .merge(ws::router())
         .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&state.config.frontend.base_url))
         .with_state(state)
@@ -53,12 +56,8 @@ fn build_cors_layer(frontend_origin: &str) -> CorsLayer {
             // avec credentials activés et une liste explicite de headers.
             CorsLayer::new()
                 .allow_origin(origin)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers([
-                    header::CONTENT_TYPE,
-                    header::ACCEPT,
-                    header::AUTHORIZATION,
-                ])
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+                .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
                 .allow_credentials(true)
         }
         Err(_) => {
@@ -68,12 +67,8 @@ fn build_cors_layer(frontend_origin: &str) -> CorsLayer {
             // ici on n'active PAS les credentials, sinon la config serait invalide.
             CorsLayer::new()
                 .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers([
-                    header::CONTENT_TYPE,
-                    header::ACCEPT,
-                    header::AUTHORIZATION,
-                ])
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
+                .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
         }
     }
 }
