@@ -40,7 +40,7 @@ pub async fn create_meeting(
     Json(body): Json<CreateMeetingRequest>,
 ) -> AppResult<(StatusCode, Json<MeetingResponse>)> {
     let host_id = require_session(&state, &headers).await?;
-    let pool = &state.db;
+    let pool = &state.pool;
 
     // Limite de participants
     if body.participant_emails.len() > 50 {
