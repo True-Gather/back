@@ -163,16 +163,25 @@ pub async fn exchange_code_for_tokens(
 ) -> AppResult<TokenResponse> {
     let token_endpoint = format!(
         "{}/protocol/openid-connect/token",
-        state.config.keycloak.issuer_url
+        state.config.keycloak.issuer_url_internal.as_deref()
+            .unwrap_or(&state.config.keycloak.issuer_url)
     );
 
-    let form_fields = vec![
+    let mut form_fields = vec![
         ("grant_type", "authorization_code".to_string()),
         ("code", code.to_string()),
         ("redirect_uri", state.config.auth_callback_url()),
         ("client_id", state.config.keycloak.client_id.clone()),
         ("code_verifier", pkce_verifier.to_string()),
     ];
+
+    // Si le client est configuré comme confidentiel (client_secret présent),
+    // l'inclure dans l'échange de code.
+    if let Some(secret) = state.config.keycloak.client_secret.as_deref() {
+        if !secret.is_empty() {
+            form_fields.push(("client_secret", secret.to_string()));
+        }
+    }
 
     let encoded_form = serde_urlencoded::to_string(&form_fields)
         .map_err(|error| AppError::Internal(format!("Failed to encode token form: {}", error)))?;
@@ -217,7 +226,8 @@ pub async fn fetch_userinfo(state: &AppState, access_token: &str) -> AppResult<U
     // Construction de l'endpoint userinfo.
     let userinfo_endpoint = format!(
         "{}/protocol/openid-connect/userinfo",
-        state.config.keycloak.issuer_url
+        state.config.keycloak.issuer_url_internal.as_deref()
+            .unwrap_or(&state.config.keycloak.issuer_url)
     );
 
     let response = state

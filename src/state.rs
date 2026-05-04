@@ -60,6 +60,9 @@ pub struct AppSession {
 
     // ID token conservé pour pouvoir faire un logout OIDC propre côté Keycloak.
     pub id_token: Option<String>,
+
+    // URL de la photo de profil (base64 data URL ou chemin).
+    pub profile_photo_url: Option<String>,
 }
 
 // État partagé principal.

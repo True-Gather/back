@@ -60,6 +60,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid"
 # Client Redis asynchrone avec pool de connexions.
 deadpool-redis = { version = "0.18", features = ["rt_tokio_1"] }
 
+# ORM / requêtes SQL asynchrones vers PostgreSQL.
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "migrate"] }
+
 # Utilitaires pour les streams/sinks asynchrones (WebSocket).
 futures-util = "0.3"
 

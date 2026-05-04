@@ -14,10 +14,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Chargement de la configuration depuis l'environnement.
     let config = AppConfig::from_env()?;
 
+    // Création du pool PostgreSQL avec limite de connexions.
+    let db = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&config.database.url)
+    // N'exige une connexion immédiate et les migrations au démarrage
+    // que si l'URL de base de données a été explicitement fournie.
+    let db = if std::env::var_os("APP_DATABASE__URL").is_some() {
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&config.database.url)
+            .await?;
+        sqlx::migrate!("./migrations").run(&db).await?;
+        db
+    } else {
+        tracing::warn!(
+            "APP_DATABASE__URL is not set; skipping startup PostgreSQL connectivity check and migrations"
+        );
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(5)
+            .connect_lazy(&config.database.url)?
+    };
     // Création du pool Redis.
     let redis = create_pool(&config.redis.url)?;
 
-    let state = AppState::new(config.clone(), redis)?;
+    let state = AppState::new(config.clone(), db, redis)?;
     let app = build_app(state);
     let address = config.server_address();
     tracing::info!("Starting TrueGather backend on {}", address);
