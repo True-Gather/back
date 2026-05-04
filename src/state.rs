@@ -72,6 +72,9 @@ pub struct AppState {
     // Client HTTP partagé pour les appels externes.
     pub http_client: reqwest::Client,
 
+    // Pool de connexions PostgreSQL.
+    pub db: PgPool,
+
     // Store mémoire temporaire des flows OIDC en attente.
     //
     // Clé : state OAuth/OIDC.
@@ -97,9 +100,6 @@ pub struct AppState {
     // Pool de connexions Redis.
     pub redis: RedisPool,
 
-    // Pool de connexions PostgreSQL.
-    pub db: PgPool,
-
     // Rooms de signalisation WebRTC actives.
     //
     // Clé externe : room_id
@@ -111,7 +111,7 @@ pub struct AppState {
 // Implémentation du state.
 impl AppState {
     // Construit un nouvel état partagé.
-    pub fn new(config: AppConfig, redis: RedisPool, db: PgPool) -> Result<Self, reqwest::Error> {
+    pub fn new(config: AppConfig, db: PgPool, redis: RedisPool) -> Result<Self, reqwest::Error> {
         // Construction du client HTTP.
         let http_client = reqwest::Client::builder()
             .user_agent("truegather-backend/0.1.0")
@@ -122,12 +122,12 @@ impl AppState {
         Ok(Self {
             config,
             http_client,
+            db,
             pending_auth: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             users: Arc::new(RwLock::new(HashMap::new())),
             users_by_keycloak_sub: Arc::new(RwLock::new(HashMap::new())),
             redis,
-            db,
             signaling_rooms: Arc::new(RwLock::new(HashMap::new())),
         })
     }

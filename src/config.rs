@@ -9,9 +9,9 @@ pub struct AppConfig {
     pub frontend: FrontendConfig,
     pub keycloak: KeycloakConfig,
     pub auth: AuthConfig,
+    pub database: DatabaseConfig,
     pub redis: RedisConfig,
     pub turn: TurnConfig,
-    pub database: DatabaseConfig,
 }
 
 // Configuration du serveur HTTP.
