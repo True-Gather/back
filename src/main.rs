@@ -14,10 +14,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Chargement de la configuration depuis l'environnement.
     let config = AppConfig::from_env()?;
 
+    // Création du pool PostgreSQL.
+    let db = sqlx::PgPool::connect(&config.database.url).await?;
+
+    // Exécution des migrations.
+    sqlx::migrate!("./migrations").run(&db).await?;
+
     // Création du pool Redis.
     let redis = create_pool(&config.redis.url)?;
 
-    let state = AppState::new(config.clone(), redis)?;
+    let state = AppState::new(config.clone(), db, redis)?;
     let app = build_app(state);
     let address = config.server_address();
     tracing::info!("Starting TrueGather backend on {}", address);

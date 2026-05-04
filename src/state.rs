@@ -6,6 +6,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use deadpool_redis::Pool as RedisPool;
+use sqlx::PgPool;
 use tokio::sync::{RwLock, mpsc};
 use uuid::Uuid;
 
@@ -68,6 +69,9 @@ pub struct AppState {
     // Client HTTP partagé pour les appels externes.
     pub http_client: reqwest::Client,
 
+    // Pool de connexions PostgreSQL.
+    pub db: PgPool,
+
     // Store mémoire temporaire des flows OIDC en attente.
     //
     // Clé : state OAuth/OIDC.
@@ -104,7 +108,7 @@ pub struct AppState {
 // Implémentation du state.
 impl AppState {
     // Construit un nouvel état partagé.
-    pub fn new(config: AppConfig, redis: RedisPool) -> Result<Self, reqwest::Error> {
+    pub fn new(config: AppConfig, db: PgPool, redis: RedisPool) -> Result<Self, reqwest::Error> {
         // Construction du client HTTP.
         let http_client = reqwest::Client::builder()
             .user_agent("truegather-backend/0.1.0")
@@ -115,6 +119,7 @@ impl AppState {
         Ok(Self {
             config,
             http_client,
+            db,
             pending_auth: Arc::new(RwLock::new(HashMap::new())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             users: Arc::new(RwLock::new(HashMap::new())),

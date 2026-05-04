@@ -9,6 +9,7 @@ pub struct AppConfig {
     pub frontend: FrontendConfig,
     pub keycloak: KeycloakConfig,
     pub auth: AuthConfig,
+    pub database: DatabaseConfig,
     pub redis: RedisConfig,
     pub turn: TurnConfig,
 }
@@ -56,6 +57,12 @@ pub struct RedisConfig {
     pub url: String,
 }
 
+// Configuration PostgreSQL.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseConfig {
+    pub url: String,
+}
+
 // Configuration TURN / ICE.
 //
 // `stun_urls`  : liste des serveurs STUN à utiliser (vient de l'env).
@@ -94,6 +101,8 @@ impl AppConfig {
             .set_default("auth.cookie_secure", false)?
             // Default Redis local.
             .set_default("redis.url", "redis://127.0.0.1:6379")?
+            // Default PostgreSQL local.
+            .set_default("database.url", "postgres://tg_user:tg_password@localhost:5434/truegather")?
             // Defaults TURN / ICE.
             // Les URLs STUN sont configurées via APP_TURN__STUN_URLS (liste JSON).
             // En l'absence de variable d'env, on utilise les serveurs STUN Google.
