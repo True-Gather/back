@@ -589,7 +589,7 @@ Nouvel endpoint **`PUT /api/v1/auth/avatar`** :
 
 #### Configuration — `src/config.rs` + `src/main.rs`
 
-- Ajout de `DatabaseConfig { url }` dans `AppConfig` pour exposer `APP__DATABASE__URL` proprement.
+- Ajout de `DatabaseConfig { url }` dans `AppConfig` pour exposer `APP_DATABASE__URL` proprement.
 - Ajout de `issuer_url_internal: Option<String>` dans `KeycloakConfig` : permet de distinguer l'URL publique Keycloak (utilisée par le navigateur) de l'URL interne (utilisée par le backend en Docker, ex. `http://host.docker.internal:...`). Évite les erreurs de résolution DNS dans un environnement containerisé.
 - Le pool PostgreSQL (`PgPool`) est maintenant instancié dans `main.rs` et passé à `AppState`.
 
