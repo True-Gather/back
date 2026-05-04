@@ -30,7 +30,7 @@ pub fn build_app(state: AppState) -> Router {
     // Construction du bloc /api/v1.
     let api_v1 = Router::new()
         // Routes "générales" de l'API.
-        .merge(api::routes::router(state.clone()))
+        .merge(api::routes::router())
         // Routes d'authentification.
         .nest("/auth", auth::routes::router())
         // Routes meetings.
