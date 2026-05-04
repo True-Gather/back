@@ -12,7 +12,24 @@ use uuid::Uuid;
 // Import de la configuration.
 use crate::config::AppConfig;
 use crate::models::User;
+use crate::webrtc_engine::sfu::{self, SfuState};
 use chrono::{DateTime, Utc};
+
+// ─── Mode d'une room ──────────────────────────────────────────────────────────
+
+/// Mode de communication d'une room.
+///
+/// - P2p  : topologie mesh directe (≤ 2 participants).
+/// - Sfu  : relais côté serveur (≥ 3 participants).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RoomMode {
+    P2p,
+    Sfu,
+}
+
+/// Map des modes de rooms : room_id → RoomMode.
+pub type RoomModes = Arc<RwLock<HashMap<String, RoomMode>>>;
+
 
 // Représente une demande d'authentification en attente.
 //
@@ -99,6 +116,15 @@ pub struct AppState {
     // Clé interne : user_id
     // Valeur      : sender vers le canal WebSocket du pair
     pub signaling_rooms: SignalingRooms,
+
+    // Mode de chaque room (P2P ou SFU).
+    //
+    // Détermine si les participants communiquent directement entre eux
+    // ou via le SFU côté serveur.
+    pub room_modes: RoomModes,
+
+    // État du SFU (peer connections côté serveur pour les rooms en mode SFU).
+    pub sfu_state: SfuState,
 }
 
 // Implémentation du state.
@@ -121,6 +147,8 @@ impl AppState {
             users_by_keycloak_sub: Arc::new(RwLock::new(HashMap::new())),
             redis,
             signaling_rooms: Arc::new(RwLock::new(HashMap::new())),
+            room_modes: Arc::new(RwLock::new(HashMap::new())),
+            sfu_state: sfu::new_sfu_state(),
         })
     }
 }

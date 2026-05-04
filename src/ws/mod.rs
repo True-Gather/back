@@ -1,25 +1,32 @@
-// Module de signalisation WebRTC peer-to-peer.
+// Serveur de signalisation WebRTC — P2P (≤ 2 participants) + SFU (≥ 3 participants).
 //
-// Ce serveur de signalisation ne transporte jamais les flux média.
-// Il sert uniquement à échanger les messages SDP (Offer / Answer)
-// et les candidats ICE entre les pairs d'une même room.
+// ─── Topologies ──────────────────────────────────────────────────────────────
 //
-// ─── Flux général ────────────────────────────────────────────────────────────
+//  P2P (mode = "p2p", ≤ 2 participants) :
+//    Chaque pair se connecte directement aux autres via des RTCPeerConnections.
+//    Le backend relaie uniquement les messages SDP et ICE candidates.
+//    Flux média : direct navigateur → navigateur (SRTP).
 //
-//  1. Le client ouvre une connexion WebSocket sur /ws/signal
-//     avec son cookie de session `tg_session`.
-//  2. Le backend vérifie la session en mémoire → extrait user_id.
-//     Si la session est invalide, la connexion est rejetée (401).
-//  3. Le client envoie { "type": "join", "room_id": "..." }.
-//     Le backend :
-//       - enregistre le pair dans la map mémoire (SignalingRooms),
-//       - enregistre le pair dans Redis (room:<id>:members),
-//       - renvoie { "type": "joined", "peers": [...] },
-//       - notifie les autres pairs avec { "type": "peer_joined" }.
-//  4. Les messages Offer / Answer / IceCandidate sont routés
-//     vers le pair `to` via son canal mpsc.
-//  5. À la déconnexion (ou suite à un Leave), le pair est retiré
-//     de la room et les autres sont notifiés.
+//  SFU (mode = "sfu", ≥ 3 participants) :
+//    Chaque pair se connecte au SFU côté serveur (1 RTCPeerConnection par client).
+//    Le SFU relaye les paquets RTP entre clients sans les décoder ni les stocker.
+//    Flux média : navigateur → SFU → navigateurs (SRTP de bout en bout).
+//
+// ─── Basculement P2P → SFU ───────────────────────────────────────────────────
+//
+//  Quand le 3ème participant rejoint une room P2P :
+//    1. Backend envoie { type: "mode_switch", mode: "sfu" } à tous.
+//    2. Backend crée une RTCPeerConnection SFU pour chaque participant.
+//    3. SFU envoie { type: "sfu_offer" } à chaque participant.
+//    4. Clients répondent avec { type: "sfu_answer" }.
+//    5. Échange ICE via { type: "sfu_ice_candidate" }.
+//
+// ─── Sécurité ─────────────────────────────────────────────────────────────────
+//
+//  - Le backend ne lit JAMAIS les flux média (ni en P2P, ni en SFU).
+//  - Chiffrement SRTP par défaut (imposé par la spec WebRTC).
+//  - Credentials TURN temporels (RFC 5766 / coturn --use-auth-secret).
+//  - Rate-limiting WebSocket implicite via MAX_SFU_SIZE.
 
 use axum::{
     Router,
@@ -36,8 +43,9 @@ use uuid::Uuid;
 use crate::{
     auth::session::extract_session_id_from_headers,
     redis,
-    state::AppState,
+    state::{AppState, RoomMode},
     webrtc_engine,
+    webrtc_engine::sfu,
 };
 
 // ─── Messages client → serveur ───────────────────────────────────────────────
@@ -45,13 +53,17 @@ use crate::{
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientMessage {
+    // ── Signalisation commune ─────────────────────────────────────────────────
+
     // Rejoindre une room de signalisation.
     Join { room_id: String },
 
     // Quitter explicitement une room.
     Leave { room_id: String },
 
-    // Envoyer une SDP Offer à un pair spécifique.
+    // ── Signalisation P2P (pair ↔ pair) ──────────────────────────────────────
+
+    // Envoyer une SDP Offer à un pair spécifique (mode P2P).
     Offer {
         room_id: String,
         to: Uuid,
@@ -65,7 +77,7 @@ enum ClientMessage {
         sdp: String,
     },
 
-    // Envoyer un candidat ICE à un pair spécifique.
+    // Envoyer un candidat ICE à un pair spécifique (mode P2P).
     IceCandidate {
         room_id: String,
         to: Uuid,
@@ -73,6 +85,24 @@ enum ClientMessage {
         sdp_mid: Option<String>,
         sdp_m_line_index: Option<u32>,
     },
+
+    // ── Signalisation SFU (client ↔ serveur SFU) ──────────────────────────────
+
+    // SDP Answer du client vers le SFU (réponse à sfu_offer).
+    SfuAnswer { room_id: String, sdp: String },
+
+    // Candidat ICE du client vers le SFU.
+    SfuIceCandidate {
+        room_id: String,
+        candidate: String,
+        sdp_mid: Option<String>,
+        sdp_mline_index: Option<u16>,
+    },
+
+    // ── Chat ─────────────────────────────────────────────────────────────────
+
+    // Message de chat : broadcast à tous les membres de la room.
+    ChatMessage { room_id: String, text: String },
 }
 
 // ─── Messages serveur → client ───────────────────────────────────────────────
@@ -80,13 +110,17 @@ enum ClientMessage {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerMessage {
+    // ── Signalisation commune ─────────────────────────────────────────────────
+
     // Confirmation d'entrée dans une room + liste des pairs déjà connectés.
+    // `mode` indique si la room est en mode P2P ou SFU.
     // `ice_servers` contient les URLs STUN/TURN à configurer côté client.
     Joined {
         room_id: String,
         user_id: Uuid,
         peers: Vec<Uuid>,
         ice_servers: Vec<webrtc_engine::IceServerInfo>,
+        mode: String,
     },
 
     // Un nouveau pair a rejoint la room.
@@ -95,21 +129,28 @@ enum ServerMessage {
     // Un pair a quitté la room.
     PeerLeft { room_id: String, user_id: Uuid },
 
-    // SDP Offer reçue d'un pair.
+    // La room bascule de P2P vers SFU (3ème participant).
+    // Les clients doivent fermer leurs RTCPeerConnections P2P
+    // et attendre un `sfu_offer` du serveur.
+    ModeSwitch { room_id: String, mode: String, peers: Vec<Uuid> },
+
+    // ── Signalisation P2P (pair ↔ pair) ──────────────────────────────────────
+
+    // SDP Offer reçue d'un pair (mode P2P).
     Offer {
         room_id: String,
         from: Uuid,
         sdp: String,
     },
 
-    // SDP Answer reçue d'un pair.
+    // SDP Answer reçue d'un pair (mode P2P).
     Answer {
         room_id: String,
         from: Uuid,
         sdp: String,
     },
 
-    // Candidat ICE reçu d'un pair.
+    // Candidat ICE reçu d'un pair (mode P2P).
     IceCandidate {
         room_id: String,
         from: Uuid,
@@ -117,6 +158,11 @@ enum ServerMessage {
         sdp_mid: Option<String>,
         sdp_m_line_index: Option<u32>,
     },
+
+    // ── Chat ─────────────────────────────────────────────────────────────────
+
+    // Message de chat diffusé à tous les membres de la room.
+    ChatBroadcast { room_id: String, from: Uuid, text: String },
 
     // Erreur renvoyée au client.
     Error { message: String },
@@ -331,29 +377,126 @@ async fn handle_client_message(
             )
             .await;
         }
+
+        // ── Signalisation SFU (client → serveur) ─────────────────────────────
+
+        ClientMessage::SfuAnswer { room_id, sdp } => {
+            if let Err(e) = webrtc_engine::validate_sdp(&sdp) {
+                let _ = peer_tx.send(
+                    serde_json::to_string(&ServerMessage::Error {
+                        message: e.to_string(),
+                    })
+                    .unwrap_or_default(),
+                );
+                return;
+            }
+            if let Err(e) = sfu::handle_answer(&state.sfu_state, &room_id, user_id, &sdp).await {
+                tracing::warn!("[ws] sfu_answer error: {e}");
+            }
+        }
+
+        ClientMessage::SfuIceCandidate {
+            room_id,
+            candidate,
+            sdp_mid,
+            sdp_mline_index,
+        } => {
+            if let Err(e) = webrtc_engine::validate_ice_candidate(&candidate) {
+                let _ = peer_tx.send(
+                    serde_json::to_string(&ServerMessage::Error {
+                        message: e.to_string(),
+                    })
+                    .unwrap_or_default(),
+                );
+                return;
+            }
+            if let Err(e) = sfu::handle_ice_candidate(
+                &state.sfu_state,
+                &room_id,
+                user_id,
+                &candidate,
+                sdp_mid,
+                sdp_mline_index,
+            )
+            .await
+            {
+                tracing::warn!("[ws] sfu_ice_candidate error: {e}");
+            }
+        }
+
+        // ── Chat ─────────────────────────────────────────────────────────────
+
+        ClientMessage::ChatMessage { room_id, text } => {
+            const MAX_CHAT_LEN: usize = 2_000;
+            if text.len() > MAX_CHAT_LEN {
+                let _ = peer_tx.send(
+                    serde_json::to_string(&ServerMessage::Error {
+                        message: format!("Message trop long (max {MAX_CHAT_LEN} caractères)."),
+                    })
+                    .unwrap_or_default(),
+                );
+                return;
+            }
+            broadcast_to_room(
+                state,
+                &room_id,
+                &ServerMessage::ChatBroadcast {
+                    room_id: room_id.clone(),
+                    from: user_id,
+                    text,
+                },
+            )
+            .await;
+        }
     }
 }
 
-// ─── Gestion des rooms ────────────────────────────────────────────────────────
+// ─── Seuils de topologie ──────────────────────────────────────────────────────
 
-// Ajoute un pair dans une room : enregistrement mémoire + Redis,
-// puis envoi des notifications.
+/// Nombre maximum de participants en mode P2P mesh.
+/// Au-delà, la room bascule automatiquement en mode SFU.
+const MAX_P2P_SIZE: usize = 2;
+
+/// Nombre maximum de participants en mode SFU.
+const MAX_SFU_SIZE: usize = 10;
+
 async fn join_room(
     state: &AppState,
     room_id: &str,
     user_id: Uuid,
     sender: mpsc::UnboundedSender<String>,
 ) {
-    // 1. Récupérer les pairs déjà présents AVANT d'ajouter le nouvel entrant.
-    let existing_peers: Vec<Uuid> = {
+    // 1. Lire les pairs déjà présents ET le mode de la room.
+    let (existing_peers, current_mode) = {
         let rooms = state.signaling_rooms.read().await;
-        rooms
+        let peers: Vec<Uuid> = rooms
             .get(room_id)
-            .map(|members| members.keys().copied().collect())
-            .unwrap_or_default()
+            .map(|m| m.keys().copied().collect())
+            .unwrap_or_default();
+        let modes = state.room_modes.read().await;
+        let mode = modes.get(room_id).cloned();
+        (peers, mode)
     };
 
-    // 2. Enregistrer dans la map mémoire.
+    let total_after = existing_peers.len() + 1;
+
+    // 2. Vérifier la limite de taille.
+    let max_size = match &current_mode {
+        Some(RoomMode::Sfu) | None => MAX_SFU_SIZE,
+        Some(RoomMode::P2p) => MAX_P2P_SIZE,
+    };
+
+    if existing_peers.len() >= max_size {
+        let _ = sender.send(
+            serde_json::to_string(&ServerMessage::Error {
+                message: format!("Room pleine : maximum {max_size} participants."),
+            })
+            .unwrap_or_default(),
+        );
+        return;
+    }
+
+    // 3. Enregistrer dans la map mémoire.
     {
         let mut rooms = state.signaling_rooms.write().await;
         rooms
@@ -362,67 +505,218 @@ async fn join_room(
             .insert(user_id, sender.clone());
     }
 
-    // 3. Enregistrer dans Redis (best-effort : erreur non fatale).
+    // 4. Enregistrer dans Redis (best-effort).
     if let Err(e) = redis::room_add_member(&state.redis, room_id, user_id).await {
         tracing::warn!("Redis room_add_member failed: {e}");
     }
 
-    // 4. Confirmer l'entrée au pair qui vient de rejoindre.
-    // On inclut les serveurs ICE (STUN/TURN) pour que le frontend
-    // configure son RTCPeerConnection avec les mêmes serveurs.
-    // Les credentials TURN sont temporels : générés à la volée, invalides après TTL.
-    let ice_servers = webrtc_engine::build_ice_servers(&state.config.turn)
-        .unwrap_or_else(|e| {
-            tracing::warn!("build_ice_servers failed: {e}");
-            webrtc_engine::build_ice_servers(&Default::default()).unwrap_or_default()
-        });
+    // 5. Construire les ICE servers une seule fois.
+    let ice_servers = webrtc_engine::build_ice_servers(&state.config.turn).unwrap_or_else(|e| {
+        tracing::warn!("build_ice_servers failed: {e}");
+        webrtc_engine::build_ice_servers(&Default::default()).unwrap_or_default()
+    });
+
+    // ─── Décision P2P vs SFU ─────────────────────────────────────────────────
+
+    let switching_to_sfu = current_mode.is_none() && total_after > MAX_P2P_SIZE;
+    let already_sfu = current_mode == Some(RoomMode::Sfu);
+    let new_mode_str = if switching_to_sfu || already_sfu { "sfu" } else { "p2p" };
+
+    // 6a. La room bascule de P2P vers SFU (3ème participant).
+    if switching_to_sfu {
+        // Mettre à jour le mode.
+        {
+            let mut modes = state.room_modes.write().await;
+            modes.insert(room_id.to_string(), RoomMode::Sfu);
+        }
+
+        // Collecter TOUS les participants (existants + nouveau).
+        let all_peers: Vec<Uuid> = {
+            let rooms = state.signaling_rooms.read().await;
+            rooms
+                .get(room_id)
+                .map(|m| m.keys().copied().collect())
+                .unwrap_or_default()
+        };
+
+        // Envoyer mode_switch aux pairs EXISTANTS (pas au nouveau, il reçoit "joined" directement).
+        let mode_switch_msg = serde_json::to_string(&ServerMessage::ModeSwitch {
+            room_id: room_id.to_string(),
+            mode: "sfu".to_string(),
+            peers: all_peers.clone(),
+        })
+        .unwrap_or_default();
+
+        {
+            let rooms = state.signaling_rooms.read().await;
+            if let Some(members) = rooms.get(room_id) {
+                for &pid in &existing_peers {
+                    if let Some(tx) = members.get(&pid) {
+                        let _ = tx.send(mode_switch_msg.clone());
+                    }
+                }
+            }
+        }
+
+        // Initialiser le SFU pour chaque participant (existants + nouveau).
+        for &pid in &all_peers {
+            let ws_tx = {
+                let rooms = state.signaling_rooms.read().await;
+                rooms
+                    .get(room_id)
+                    .and_then(|m| m.get(&pid))
+                    .cloned()
+            };
+            let Some(ws_tx) = ws_tx else { continue };
+
+            // Un nouveau participant ne reçoit pas de relay tracks des autres encore
+            // (ils n'ont pas encore envoyé leurs flux). Pour les participants existants,
+            // les tracks arriveront via on_track quand les clients reconnectent au SFU.
+            let existing_relays = sfu::get_existing_relays(&state.sfu_state, room_id, pid).await;
+
+            if let Err(e) = sfu::add_participant(
+                &state.sfu_state,
+                &state.config.turn,
+                room_id,
+                pid,
+                ws_tx,
+                existing_relays,
+            )
+            .await
+            {
+                tracing::warn!("[ws] sfu add_participant failed for {pid}: {e}");
+            }
+        }
+
+        // Confirmer l'entrée au nouveau participant (avec mode = "sfu").
+        let joined_msg = serde_json::to_string(&ServerMessage::Joined {
+            room_id: room_id.to_string(),
+            user_id,
+            peers: existing_peers.clone(),
+            ice_servers,
+            mode: "sfu".to_string(),
+        })
+        .unwrap_or_default();
+        let _ = sender.send(joined_msg);
+
+        return;
+    }
+
+    // 6b. La room est déjà en mode SFU : ajouter le nouveau participant au SFU.
+    if already_sfu {
+        let existing_relays =
+            sfu::get_existing_relays(&state.sfu_state, room_id, user_id).await;
+
+        if let Err(e) = sfu::add_participant(
+            &state.sfu_state,
+            &state.config.turn,
+            room_id,
+            user_id,
+            sender.clone(),
+            existing_relays,
+        )
+        .await
+        {
+            tracing::warn!("[ws] sfu add_participant (existing sfu room) failed: {e}");
+        }
+
+        let joined_msg = serde_json::to_string(&ServerMessage::Joined {
+            room_id: room_id.to_string(),
+            user_id,
+            peers: existing_peers.clone(),
+            ice_servers,
+            mode: "sfu".to_string(),
+        })
+        .unwrap_or_default();
+        let _ = sender.send(joined_msg);
+
+        // Notifier les pairs existants (ils verront le flux arriver via on_track SFU).
+        let peer_joined = serde_json::to_string(&ServerMessage::PeerJoined {
+            room_id: room_id.to_string(),
+            user_id,
+        })
+        .unwrap_or_default();
+        let rooms = state.signaling_rooms.read().await;
+        if let Some(members) = rooms.get(room_id) {
+            for &pid in &existing_peers {
+                if let Some(tx) = members.get(&pid) {
+                    let _ = tx.send(peer_joined.clone());
+                }
+            }
+        }
+
+        return;
+    }
+
+    // 6c. Mode P2P (≤ 2 participants) : flux de signalisation standard.
+
+    // Mettre le mode à P2P si la room vient d'être créée.
+    if current_mode.is_none() {
+        let mut modes = state.room_modes.write().await;
+        modes.insert(room_id.to_string(), RoomMode::P2p);
+    }
+
+    // Confirmer l'entrée (mode = "p2p").
     let joined_msg = serde_json::to_string(&ServerMessage::Joined {
         room_id: room_id.to_string(),
         user_id,
         peers: existing_peers.clone(),
         ice_servers,
+        mode: new_mode_str.to_string(),
     })
     .unwrap_or_default();
     let _ = sender.send(joined_msg);
 
-    // 5. Notifier les pairs déjà présents.
-    let peer_joined_msg = serde_json::to_string(&ServerMessage::PeerJoined {
+    // Notifier les pairs existants.
+    let peer_joined = serde_json::to_string(&ServerMessage::PeerJoined {
         room_id: room_id.to_string(),
         user_id,
     })
     .unwrap_or_default();
-
     let rooms = state.signaling_rooms.read().await;
     if let Some(members) = rooms.get(room_id) {
-        for peer_id in &existing_peers {
-            if let Some(tx) = members.get(peer_id) {
-                let _ = tx.send(peer_joined_msg.clone());
+        for &pid in &existing_peers {
+            if let Some(tx) = members.get(&pid) {
+                let _ = tx.send(peer_joined.clone());
             }
         }
     }
 }
 
-// Retire un pair d'une room : nettoyage mémoire + Redis,
+// Retire un pair d'une room : nettoyage mémoire + SFU + Redis,
 // puis notification des pairs restants.
 async fn leave_room(state: &AppState, room_id: &str, user_id: Uuid) {
-    // 1. Supprimer de la map mémoire.
-    {
+    // 1. Supprimer de la map mémoire. Vérifier si la room devient vide.
+    let room_empty = {
         let mut rooms = state.signaling_rooms.write().await;
         if let Some(members) = rooms.get_mut(room_id) {
             members.remove(&user_id);
-            // Supprimer la room si elle est vide.
             if members.is_empty() {
                 rooms.remove(room_id);
+                true
+            } else {
+                false
             }
+        } else {
+            true
         }
+    };
+
+    // 2. Nettoyage SFU (best-effort).
+    sfu::remove_participant(&state.sfu_state, room_id, user_id).await;
+
+    // 3. Si la room est vide, supprimer son mode.
+    if room_empty {
+        let mut modes = state.room_modes.write().await;
+        modes.remove(room_id);
     }
 
-    // 2. Supprimer de Redis (best-effort).
+    // 4. Supprimer de Redis (best-effort).
     if let Err(e) = redis::room_remove_member(&state.redis, room_id, user_id).await {
         tracing::warn!("Redis room_remove_member failed: {e}");
     }
 
-    // 3. Notifier les pairs restants.
+    // 5. Notifier les pairs restants.
     let peer_left_msg = serde_json::to_string(&ServerMessage::PeerLeft {
         room_id: room_id.to_string(),
         user_id,
@@ -438,6 +732,25 @@ async fn leave_room(state: &AppState, room_id: &str, user_id: Uuid) {
 }
 
 // ─── Routage d'un message vers un pair ───────────────────────────────────────
+
+// Diffuse un message sérialisé à tous les membres d'une room.
+async fn broadcast_to_room(state: &AppState, room_id: &str, msg: &ServerMessage) {
+    let json = match serde_json::to_string(msg) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Serialization error in broadcast_to_room: {e}");
+            return;
+        }
+    };
+
+    let rooms = state.signaling_rooms.read().await;
+    let Some(members) = rooms.get(room_id) else {
+        return;
+    };
+    for tx in members.values() {
+        let _ = tx.send(json.clone());
+    }
+}
 
 // Envoie un message sérialisé au canal mpsc d'un pair cible dans une room.
 async fn route_to_peer(state: &AppState, room_id: &str, to: Uuid, msg: &ServerMessage) {
