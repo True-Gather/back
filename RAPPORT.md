@@ -542,3 +542,391 @@ On a écrit 14 tests automatiques pour s'assurer que tout fonctionne correctemen
 - On vérifie qu'un SDP invalide est bien rejeté avec un message d'erreur.
 
 Ces tests tournent automatiquement à chaque modification du code, ce qui garantit qu'on n'a pas cassé quelque chose sans s'en rendre compte.
+
+---
+
+---
+
+# Session du 14 avril 2026
+
+**Objectif :** Implémentation de la photo de profil (avatar) — persistance PostgreSQL, endpoint REST, composable Vue, et intégration du mode sombre sur le dashboard.
+
+---
+
+## Ce qui a été fait
+
+### 1. Backend — champ `profile_photo_url` et endpoint `PUT /api/v1/auth/avatar`
+
+#### Modèle `User` — `src/models/user.rs`
+
+Le champ `profile_photo_url: Option<String>` a été ajouté à :
+- `User` : représentation interne complète d'un utilisateur.
+- `UserProfileView` : DTO renvoyé au client via `/me`.
+
+Cela permet de stocker une **data URL base64** (ex. `data:image/png;base64,...`) ou une URL externe pointant vers la photo de profil.
+
+#### Session mémoire — `src/auth/session.rs` + `src/state.rs`
+
+`profile_photo_url` a été ajouté à `AppSession` (la session en mémoire vive). Ainsi, après connexion, la photo de profil est immédiatement disponible sans requête DB supplémentaire pour chaque appel à `/me`.
+
+#### Synchronisation à la connexion — `src/auth/sync.rs`
+
+La fonction `sync_user_from_keycloak` crée ou met à jour le user en base via un **UPSERT** (`ON CONFLICT DO UPDATE`). Elle `RETURNING profile_photo_url` pour récupérer la valeur persistée (qui peut avoir été mise à jour manuellement entre deux connexions). La valeur est ensuite propagée dans l'objet `User` retourné.
+
+```rust
+async fn sync_user_to_db(state, keycloak_sub, user) -> AppResult<Option<String>> {
+    // INSERT ... ON CONFLICT DO UPDATE SET ... RETURNING profile_photo_url
+}
+```
+
+#### Endpoint avatar — `src/auth/handlers.rs` + `src/auth/routes.rs`
+
+Nouvel endpoint **`PUT /api/v1/auth/avatar`** :
+- Extrait la session courante via le cookie `tg_session`.
+- Reçoit `{ "avatar_url": "data:image/png;base64,..." }` (ou `null` pour supprimer).
+- Effectue un `UPDATE users SET profile_photo_url = $1 WHERE keycloak_id = $2`.
+- Met à jour la session mémoire en temps réel (pas besoin de se reconnecter).
+
+#### Configuration — `src/config.rs` + `src/main.rs`
+
+- Ajout de `DatabaseConfig { url }` dans `AppConfig` pour exposer `APP_DATABASE__URL` proprement.
+- Ajout de `issuer_url_internal: Option<String>` dans `KeycloakConfig` : permet de distinguer l'URL publique Keycloak (utilisée par le navigateur) de l'URL interne (utilisée par le backend en Docker, ex. `http://host.docker.internal:...`). Évite les erreurs de résolution DNS dans un environnement containerisé.
+- Le pool PostgreSQL (`PgPool`) est maintenant instancié dans `main.rs` et passé à `AppState`.
+
+---
+
+### 2. Frontend — composable `useAvatar` + SettingsModal + thème sombre
+
+#### Composable `useAvatar` — `app/composables/useAvatar.ts`
+
+Gère l'état de l'avatar de façon réactive :
+
+| Fonction | Comportement |
+|----------|-------------|
+| `loadAvatar()` | Priorité : `profile_photo_url` du backend. Repli : `localStorage` pour éviter un flash au chargement. |
+| `saveAvatar(dataUrl)` | Mise à jour locale immédiate + `PUT /api/v1/auth/avatar` en arrière-plan. |
+
+Le cache `localStorage` (clé `tg-avatar`) assure une expérience fluide : la photo s'affiche immédiatement au rechargement de page, avant même la réponse du backend.
+
+#### `app/composables/useAuth.ts`
+
+Ajout du champ `profile_photo_url?: string | null` dans le type `AuthUser` pour correspondre à la nouvelle réponse de `/me`.
+
+#### `app/app.vue`
+
+Au montage de l'application (`onMounted`) :
+- Restauration du thème depuis `localStorage` (`tg-theme`).
+- Appel à `loadAvatar()` pour pré-charger la photo de profil globalement.
+
+#### `components/barrehorizontale/SettingsModal.vue` — refonte complète en onglets
+
+La modal de paramètres a été entièrement réécrite. Avant : un seul bloc avec une option "Notifications". Après : **4 onglets distincts** :
+
+| Onglet | Contenu |
+|--------|---------|
+| **Profil** | Upload de la photo de profil (fichier image → base64 via `FileReader`) + champs prénom/nom + bouton "Enregistrer". Utilise `saveAvatar()` du composable `useAvatar`. |
+| **Apparence** | Sélecteur de thème visuel (clair / sombre / système) avec prévisualisation miniature. Bouton de déconnexion. |
+| **Notifications** | Toggles : rappels de réunion, sons, invitations. |
+| **Réunions** | Toggles : micro coupé par défaut, caméra coupée par défaut. |
+
+L'upload avatar côté frontend lit le fichier sélectionné avec `FileReader.readAsDataURL()`, vérifie la taille (alerte si > 2 Mo), et appelle `saveAvatar()` qui persiste en DB via le backend.
+
+#### `components/barrehorizontale/UserMenu.vue` — affichage de l'avatar
+
+Le bouton du menu utilisateur (en haut à droite du header) affiche maintenant la **photo de profil réelle** si elle est disponible, via `useAvatar()`. Si aucune photo : repli sur les initiales comme avant.
+
+```vue
+<img v-if="avatarDataUrl" :src="avatarDataUrl" class="avatar-photo" />
+<span v-else class="avatar-text">{{ initials }}</span>
+```
+
+Les couleurs en dur du dropdown ont également été migrées vers des variables CSS (thème sombre).
+
+#### `app/pages/dashboard.vue` — intégration du mode sombre
+
+Toutes les couleurs en dur (`#14b8a6`, `white`, `#4b5563`, etc.) ont été remplacées par des variables CSS (`var(--accent-text)`, `var(--bg-sidebar)`, `var(--text-secondary)`, etc.). Cela permet au **mode sombre** défini dans `assets/theme.css` de s'appliquer correctement sur l'ensemble du dashboard sans dupliquer les règles CSS.
+
+---
+
+## Pourquoi ces choix
+
+| Choix | Raison |
+|-------|--------|
+| **Data URL en base64** | Pas de gestion de fichier serveur ni de stockage objet à configurer. Suffisant pour les avatars (petites images). |
+| **Double stratégie cache** (mémoire session + localStorage) | Évite les flashs visuels et les requêtes DB inutiles à chaque appel. |
+| **RETURNING dans le UPSERT** | Récupère en une seule requête la valeur persistée (incluant les modifications faites hors session, ex. via admin). |
+| **`issuer_url_internal`** | Sépare proprement l'URL vue par le navigateur de celle vue par le backend en Docker — problème courant en développement containerisé. |
+| **Variables CSS pour le thème** | Permet au mode sombre de s'activer sans dupliquer les styles ni utiliser de classes JavaScript. |
+
+---
+
+## Sécurité
+
+| Point | Détail |
+|-------|--------|
+| **Authentification requise** | `update_avatar` extrait et valide le cookie `tg_session` avant toute opération. Sans session valide → `401 Unauthorized`. |
+| **Isolation par `keycloak_id`** | La requête `UPDATE` cible uniquement le user identifié par son `keycloak_sub` issu de la session — pas d'input utilisateur sur l'identifiant. Aucune possibilité d'écraser la photo d'un autre utilisateur. |
+| **Taille de la data URL** | Non limitée côté backend pour l'instant — à surveiller (un avatar en haute résolution en base64 peut peser plusieurs Mo et saturer la DB). Une validation de taille devra être ajoutée. |
+| **Pas de validation du type MIME** | Le backend accepte n'importe quelle chaîne comme `avatar_url`. La validation du préfixe `data:image/` devrait être faite côté frontend ET backend pour éviter l'injection de contenu arbitraire. |
+| **`issuer_url_internal` non exposé** | Cette URL interne ne transite jamais vers le client — elle est utilisée uniquement dans les appels serveur-à-serveur (Keycloak token + userinfo). |
+
+---
+
+---
+
+# Session du 15 avril 2026
+
+**Objectif :** Remise en route de l'environnement de développement.
+
+---
+
+## Ce qui a été fait
+
+Redémarrage des deux serveurs de développement :
+
+- **Backend** (`truegather-backend`) — Rust/Axum, lancé via `cargo run` depuis `/backend/`.
+  - Écoute sur `0.0.0.0:8082`.
+  - Migrations SQLx déjà appliquées (message informatif `relation "_sqlx_migrations" already exists` — normal au redémarrage, ce n'est pas une erreur).
+
+- **Frontend** (`front`) — Nuxt 4.3.1 avec Vite 7.3.1, lancé via `npm run dev` depuis `/frontend/`.
+  - Accessible sur `http://localhost:3000/`.
+
+## Pourquoi
+
+Simple redémarrage de session de travail — les processus ne persistaient plus depuis la session précédente.
+
+## Points de sécurité à garder en tête
+
+| Point | Détail |
+|-------|--------|
+| **Mode développement uniquement** | Les deux serveurs tournent en mode `dev` (profil `[unoptimized + debuginfo]` pour Rust, mode dev Nuxt avec HMR). Ils ne doivent **jamais** être exposés sur un réseau public dans cet état. |
+| **Backend sur `0.0.0.0`** | Le backend écoute sur toutes les interfaces réseau locales. En production, mettre un reverse proxy (Nginx, Caddy) devant avec TLS. |
+| **Pas de HTTPS en dev** | Les cookies de session (`tg_session`) sont transmis sans chiffrement en local. En production, `Secure` + `HttpOnly` + `SameSite=Strict` doivent être activés et HTTPS obligatoire. |
+| **Secrets en `.env`** | Les variables sensibles (secrets TURN, clé session, DSN DB) ne doivent pas être commitées dans git. Vérifier que `.env` est bien dans `.gitignore`. |
+
+---
+
+---
+
+# Session du 15 avril 2026 — Suite : Modal Paramètres, changement de mot de passe
+
+**Objectif :** Documenter le fonctionnement complet de la modal `Paramètres` et implémenter le changement de mot de passe.
+
+---
+
+## La modal Paramètres — comment ça fonctionne
+
+### Vue d'ensemble
+
+La modal Paramètres est dans `components/barrehorizontale/SettingsModal.vue`. Elle s'ouvre depuis le menu utilisateur (bouton en haut à droite du header).
+
+Elle est organisée en **5 onglets** :
+
+```
+[ Profil ] [ Apparence ] [ Notifications ] [ Réunions ] [ Sécurité ]
+```
+
+Le principe est simple : un tableau `tabs` contient la liste des onglets. Une variable réactive `activeTab` trace lequel est actif. Quand on clique sur un onglet, `activeTab` change, et Vue affiche le bon bloc grâce à des `v-if`.
+
+```typescript
+const tabs = [
+  { id: 'profil',        label: 'Profil' },
+  { id: 'apparence',     label: 'Apparence' },
+  { id: 'notifications', label: 'Notifications' },
+  { id: 'reunions',      label: 'Réunions' },
+  { id: 'securite',      label: 'Sécurité' },
+]
+const activeTab = ref('profil')  // onglet ouvert par défaut
+```
+
+---
+
+### Onglet 1 — Profil
+
+**Ce qu'on voit :** cercle avec la photo (ou les initiales), champs Prénom / Nom, bouton Enregistrer.
+
+#### Photo de profil
+
+| Étape | Ce qui se passe |
+|-------|----------------|
+| Clic sur le cercle | `triggerFileInput()` → déclenche un `<input type="file" accept="image/*">` invisible |
+| Sélection du fichier | `onAvatarChange()` vérifie que le fichier fait moins de 2 Mo |
+| Lecture du fichier | `FileReader.readAsDataURL(file)` convertit l'image en **data URL base64** (ex. `data:image/png;base64,...`) |
+| Sauvegarde | `saveAvatar(dataUrl)` de `useAvatar` : met à jour l'affichage immédiatement + envoie `PUT /api/v1/auth/avatar` au backend + cache dans `localStorage` |
+| Suppression | Clic sur "Supprimer" → `removeAvatar()` → `saveAvatar(null)` supprime côté backend et efface le cache local |
+
+Si aucune photo n'est définie, le cercle affiche les **initiales** calculées depuis le nom de l'utilisateur connecté.
+
+#### Champs Prénom / Nom
+
+Liés à la variable réactive `form` via `v-model`. Le bouton "Enregistrer" appelle `saveProfile()`.
+
+> **Note :** `saveProfile()` est actuellement un placeholder (simule un délai de 800ms). L'appel API `PUT /api/v1/users/me` est à implémenter.
+
+---
+
+### Onglet 2 — Apparence
+
+**Ce qu'on voit :** 3 cartes de thème (Clair / Sombre / Système) avec prévisualisation miniature, et un bouton "Se déconnecter".
+
+#### Sélecteur de thème
+
+| Valeur | Comportement |
+|--------|-------------|
+| `light` | `document.documentElement.setAttribute('data-theme', 'light')` — force le thème clair |
+| `dark` | `document.documentElement.setAttribute('data-theme', 'dark')` — force le thème sombre |
+| `system` | `document.documentElement.removeAttribute('data-theme')` — laisse le navigateur choisir selon les préférences OS |
+
+La valeur est **persistée dans `localStorage`** (clé `tg-theme`). Au montage de la modal, le thème sauvegardé est relu et appliqué. Au montage global de `app.vue`, le même mécanisme s'applique pour que le thème soit actif dès le chargement de la page.
+
+Le changement de thème est **instantané** — aucun rechargement de page, aucun appel API. Tout se fait via l'attribut `data-theme` sur `<html>`, que les variables CSS de `assets/theme.css` écoutent.
+
+#### Bouton Se déconnecter
+
+Appelle `logout()` de `useAuth`, qui supprime la session côté backend et redirige vers la page de login.
+
+---
+
+### Onglet 3 — Notifications
+
+**Ce qu'on voit :** 3 toggles ON/OFF.
+
+| Toggle | Variable | Par défaut |
+|--------|----------|-----------|
+| Rappels de réunion | `prefs.meetingReminders` | ON |
+| Sons de notification | `prefs.notifSound` | ON |
+| Invitations aux réunions | `prefs.meetingInvites` | ON |
+
+Les toggles sont **visuellement réactifs** — cliquer l'un d'eux inverse immédiatement sa valeur (`!prefs.xxx`). Ce sont des préférences locales pour l'instant (non persistées en base).
+
+---
+
+### Onglet 4 — Réunions
+
+**Ce qu'on voit :** 2 toggles ON/OFF.
+
+| Toggle | Variable | Par défaut |
+|--------|----------|-----------|
+| Micro coupé par défaut | `prefs.mutedByDefault` | OFF |
+| Caméra coupée par défaut | `prefs.cameraOffByDefault` | OFF |
+
+Même principe que l'onglet Notifications — réactifs visuellement, à connecter plus tard à la logique WebRTC.
+
+---
+
+### Onglet 5 — Sécurité
+
+**Ce qu'on voit :** 3 champs mot de passe + bouton "Modifier".
+
+#### Flux complet du changement de mot de passe
+
+```
+Utilisateur saisit :
+  ├── Mot de passe actuel
+  ├── Nouveau mot de passe
+  └── Confirmation
+
+Frontend valide :
+  ├── Champ actuel non vide
+  ├── Nouveau mot de passe ≥ 14 caractères
+  └── Nouveau = Confirmation  →  sinon : message d'erreur rouge, arrêt
+
+Frontend envoie : PUT /api/v1/auth/password
+  Body JSON : { current_password, new_password, confirm_password }
+
+Backend valide à nouveau (sécurité côté serveur) :
+  ├── Session valide (cookie tg_session)  →  sinon 401
+  ├── new_password = confirm_password     →  sinon 400
+  └── new_password ≥ 14 caractères        →  sinon 400
+
+Backend vérifie le mot de passe actuel (ROPC Keycloak) :
+  POST /realms/truegather/protocol/openid-connect/token
+  grant_type=password, username=email, password=current_password
+  →  Si Keycloak refuse : 400 "Mot de passe actuel incorrect"
+
+Backend obtient un token admin (client_credentials) :
+  POST /realms/truegather/protocol/openid-connect/token
+  grant_type=client_credentials
+
+Backend met à jour le mot de passe (API admin Keycloak) :
+  PUT /admin/realms/truegather/users/{keycloak_id}/reset-password
+  Body : { type: "password", value: new_password, temporary: false }
+
+Frontend affiche :
+  ├── Succès → message vert, champs vidés
+  └── Erreur → message rouge avec le détail
+```
+
+#### Pourquoi passer par Keycloak et pas par la DB ?
+
+Les mots de passe ne sont **jamais stockés dans notre base PostgreSQL**. Keycloak est le seul gestionnaire d'identité — il détient les hash des mots de passe. Modifier le mot de passe directement en DB ne fonctionnerait pas : il faut forcément passer par l'API Keycloak.
+
+---
+
+## Ce qui est à finir
+
+| Élément | État |
+|---------|------|
+| `saveProfile()` (Prénom/Nom) | Placeholder — l'API `PUT /api/v1/users/me` est à créer |
+| Persistance des préférences (Notifications/Réunions) | Stockées en mémoire uniquement — à sauvegarder en DB |
+| Changement de mot de passe | **Fonctionnel côté backend et frontend** |
+| Photo de profil | **Fonctionnelle** |
+| Thème sombre | **Fonctionnel** |
+| **Email de confirmation après changement de mot de passe** | **À faire** — voir ci-dessous |
+
+### Email après changement de mot de passe — à implémenter
+
+Après un changement de mot de passe réussi, l'utilisateur doit recevoir un **email de confirmation de sécurité**. Cela lui permet d'être alerté si le changement est frauduleux (quelqu'un a pris sa session).
+
+**Ce qu'il faut faire :**
+
+#### 1. Implémenter `src/mail/mod.rs`
+
+Le module existe mais est vide. Il faudra choisir une crate d'envoi d'email et implémenter une fonction `send_password_changed_notification` :
+
+```
+Expéditeur : noreply@truegather.app
+Destinataire : session.email
+Sujet : "Votre mot de passe TrueGather a été modifié"
+Corps : "Bonjour, votre mot de passe a été modifié le [date] à [heure].
+         Si vous n'êtes pas à l'origine de cette modification, contactez-nous."
+```
+
+Crates candidates :
+- `lettre` (0.11) — la référence en Rust, support SMTP + STARTTLS
+- `sendgrid` — si on utilise SendGrid comme provider
+
+Variables `.env` à prévoir :
+```
+APP__MAIL__SMTP_HOST=smtp.monservice.com
+APP__MAIL__SMTP_PORT=587
+APP__MAIL__SMTP_USER=...
+APP__MAIL__SMTP_PASSWORD=...
+APP__MAIL__FROM=noreply@truegather.app
+```
+
+#### 2. Appeler `send_password_changed_notification` à la fin de `change_password`
+
+Dans `src/auth/handlers.rs`, après le `reset_resp` Keycloak réussi :
+
+```rust
+// Envoi de l'email de confirmation (non bloquant — on ne fait pas échouer
+// le changement de mot de passe si l'envoi d'email rate).
+if let Err(e) = mail::send_password_changed_notification(&state, &session.email).await {
+    tracing::warn!("Failed to send password change notification: {}", e);
+}
+```
+
+> L'envoi d'email doit être **non bloquant** : si le serveur SMTP est indisponible, le changement de mot de passe a déjà réussi — on ne doit pas retourner une erreur à l'utilisateur pour ça. On log juste un warning.
+
+---
+
+## Sécurité
+
+| Point | Détail |
+|-------|--------|
+| **Double validation** | Les règles (14 caractères, correspondance) sont vérifiées côté frontend ET backend. Impossible de les contourner en appelant l'API directement. |
+| **Vérification du mot de passe actuel** | Via le flow ROPC Keycloak : on ne peut pas changer le mot de passe de quelqu'un sans connaître son mot de passe actuel. |
+| **Pas d'accès au hash** | Le backend ne lit jamais le hash du mot de passe. La vérification se fait entièrement via le protocole OAuth2/OIDC de Keycloak. |
+| **Token admin éphémère** | Le token admin obtenu pour mettre à jour le mot de passe n'est jamais stocké — il est utilisé dans la même requête et oublié. |
+| **Prérequis Keycloak** | Le service account du client `truegather-backend` doit avoir le rôle `manage-users` dans `realm-management` de Keycloak pour que l'étape admin fonctionne. |

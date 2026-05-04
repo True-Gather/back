@@ -1,16 +1,15 @@
-// Déclaration des routes génériques de l'API.
-
 use axum::{
     Router,
-    routing::{get, post},
+    routing::get,
 };
 
-// Import des handlers.
-use crate::api::handlers;
+use crate::{
+    api::handlers,
+    state::AppState,
+};
 
-// Construit le router API générique.
-pub fn router() -> Router<crate::state::AppState> {
+pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/health", get(handlers::health))
-        .route("/meetings", post(handlers::create_meeting))
+        .with_state(state)
 }

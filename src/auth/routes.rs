@@ -14,6 +14,8 @@ pub fn router() -> Router<crate::state::AppState> {
         .route("/callback", get(handlers::auth_callback))
         .route("/logout", get(handlers::logout))
         .route("/me", get(handlers::me))
+        .route("/avatar", put(handlers::update_avatar))
+        .route("/password", put(handlers::change_password))
         .route("/forgot-password", post(handlers::forgot_password))
         .route("/reset-password", post(handlers::reset_password))
         // Changement de mot de passe pour un utilisateur connecté.

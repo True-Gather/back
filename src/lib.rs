@@ -6,6 +6,7 @@ pub mod config;
 pub mod error;
 pub mod mail;
 pub mod media;
+pub mod meetings;
 pub mod models;
 pub mod redis;
 pub mod state;
@@ -29,9 +30,11 @@ pub fn build_app(state: AppState) -> Router {
     // Construction du bloc /api/v1.
     let api_v1 = Router::new()
         // Routes "générales" de l'API.
-        .merge(api::routes::router())
+        .merge(api::routes::router(state.clone()))
         // Routes d'authentification.
-        .nest("/auth", auth::routes::router());
+        .nest("/auth", auth::routes::router())
+        // Routes meetings.
+        .merge(meetings::routes::router());
 
     // Construction du router final.
     Router::new()
@@ -56,7 +59,7 @@ fn build_cors_layer(frontend_origin: &str) -> CorsLayer {
             // avec credentials activés et une liste explicite de headers.
             CorsLayer::new()
                 .allow_origin(origin)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
                 .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
                 .allow_credentials(true)
         }
@@ -67,7 +70,7 @@ fn build_cors_layer(frontend_origin: &str) -> CorsLayer {
             // ici on n'active PAS les credentials, sinon la config serait invalide.
             CorsLayer::new()
                 .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE, Method::OPTIONS])
                 .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
         }
     }

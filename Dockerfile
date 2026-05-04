@@ -11,6 +11,7 @@ RUN mkdir src \
 
 # Copie du code source complet et compilation réelle
 COPY src ./src
+COPY migrations ./migrations
 COPY keycloak ./keycloak
 # La commande 'touch' permet de forcer la recompilation du main.rs
 RUN touch src/main.rs && cargo build --release
